@@ -702,16 +702,32 @@ pub fn publish_available_aggregate(
                     "Export precedente non verificabile per l'aggregato disponibile".into(),
                 );
             }
-            let mut header = Vec::new();
-            std::fs::File::open(output.join(dataset_filename(&entry["cards_file"])?))?
-                .take(1024 * 1024)
-                .read_to_end(&mut header)?;
-            let count = count_pattern
-                .captures(&header)
-                .and_then(|m| m.get(1))
-                .ok_or("Trasporto delle schede incompleto")?
-                .as_bytes();
-            let count = std::str::from_utf8(count)?.parse::<usize>()?;
+            let count = if entry["storage"] == super::COLLECTION_STAGING {
+                if !super::collection_staging(output)? {
+                    return Err("Area privata della raccolta mancante".into());
+                }
+                let shared: Value = serde_json::from_reader(std::fs::File::open(
+                    output.join(dataset_filename(&entry["connections_metadata_file"])?),
+                )?)?;
+                if shared["format"] != "connections_metadata_v1" || shared["metadata"] != metadata {
+                    return Err("Metadati delle connessioni non corrispondenti".into());
+                }
+                shared["census_page_count"]
+                    .as_u64()
+                    .and_then(|n| usize::try_from(n).ok())
+                    .ok_or("Denominatore delle connessioni non valido")?
+            } else {
+                let mut header = Vec::new();
+                std::fs::File::open(output.join(dataset_filename(&entry["cards_file"])?))?
+                    .take(1024 * 1024)
+                    .read_to_end(&mut header)?;
+                let count = count_pattern
+                    .captures(&header)
+                    .and_then(|m| m.get(1))
+                    .ok_or("Trasporto delle schede incompleto")?
+                    .as_bytes();
+                std::str::from_utf8(count)?.parse::<usize>()?
+            };
             let signature = file_signature(&path)?;
             signatures.push((path.clone(), signature));
             files.insert(language.clone(), name.to_owned());

@@ -313,6 +313,10 @@ pub(super) fn approved_outputs(
         if !summary_matches(folder, entry, std::slice::from_ref(file)) {
             return false;
         }
+        let collection = entry["storage"] == dumps::COLLECTION_STAGING;
+        if collection && !dumps::collection_staging(folder).unwrap_or(false) {
+            return false;
+        }
         for key in [
             "file",
             "observations_file",
@@ -328,7 +332,9 @@ pub(super) fn approved_outputs(
             let Ok(name) = dumps::dataset_filename(&entry[key]) else {
                 return false;
             };
-            if !complete_json(&folder.join(name)) {
+            let virtual_file =
+                collection && matches!(key, "observations_file" | "cards_file" | "articles_file");
+            if !virtual_file && !complete_json(&folder.join(name)) {
                 return false;
             }
         }
@@ -343,7 +349,7 @@ pub(super) fn approved_outputs(
             }) else {
                 return false;
             };
-            if !folder.join(name).is_dir() {
+            if !collection && !folder.join(name).is_dir() {
                 return false;
             }
         }

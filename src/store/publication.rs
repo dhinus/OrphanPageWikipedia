@@ -8,6 +8,13 @@ pub fn publish(folder: &Path, destination: &Path, identity: &Value) -> DumpResul
         return Err("Il database deve avere estensione .sqlite".into());
     }
     let selected = select_entries(folder)?;
+    if selected
+        .iter()
+        .any(|entry| entry["storage"] == dumps::COLLECTION_STAGING)
+        && !dumps::collection_staging(folder)?
+    {
+        return Err("Area privata della raccolta mancante".into());
+    }
     let entries = &selected;
     let parent = destination
         .parent()

@@ -38,9 +38,9 @@ use canonical::{python_json, write_atomic, write_sorted_json, CanonicalDigest};
 #[cfg(feature = "cli")]
 mod publication;
 #[cfg(feature = "cli")]
-pub(crate) use publication::dataset_filename;
-#[cfg(feature = "cli")]
 pub use publication::{analyze_file, rebuild_dashboard};
+#[cfg(feature = "cli")]
+pub(crate) use publication::{collection_staging, dataset_filename, COLLECTION_STAGING};
 #[cfg(feature = "cli")]
 use publication::{
     export_directory, manifest_entry, prepare_member, publish_prepared, reuse_export,

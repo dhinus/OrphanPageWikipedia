@@ -106,6 +106,145 @@ impl Fixture {
 }
 
 #[test]
+fn private_collection_staging_omits_file_transports_and_preserves_every_relational_record() {
+    let w = Fixture::new("20261001");
+    w.publish();
+    let baseline = fs::read(w.db()).unwrap();
+    let identity = json!({"rule":store::RULE,"test":"private collection staging"});
+    let hash = dumps::canonical_json_sha256(&identity).unwrap();
+    let folder = w.root.join(format!(".collection-{}-exports", &hash[..16]));
+    fs::create_dir(&folder).unwrap();
+    write(&folder.join(".owner.json"), &identity);
+    write(&folder.join("manifest.json"), &w.entries);
+    for entry in w.entries.as_array().unwrap() {
+        let file = entry["file"].as_str().unwrap();
+        fs::copy(w.root.join(file), folder.join(file)).unwrap();
+    }
+    dumps::rebuild_dashboard(&folder).unwrap();
+    let entries: Value =
+        serde_json::from_slice(&fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    for entry in entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] != "aggregate")
+    {
+        assert_eq!(entry["storage"], "relational_collection_staging_v1");
+        for key in [
+            "observations_file",
+            "articles_file",
+            "cards_file",
+            "cards_dir",
+            "connections_dir",
+            "profile_topics_dir",
+        ] {
+            assert!(!folder.join(entry[key].as_str().unwrap()).exists());
+        }
+        assert!(!folder
+            .join(entry["file"].as_str().unwrap())
+            .with_extension("csv")
+            .exists());
+    }
+    let destination = folder.join("collection.sqlite");
+    store::publish(&folder, &destination, &json!({"test":true})).unwrap();
+    let original = rusqlite::Connection::open(w.db()).unwrap();
+    let compact = rusqlite::Connection::open(&destination).unwrap();
+    for table in [
+        "pages",
+        "topics",
+        "targets",
+        "candidates",
+        "evidence",
+        "texts",
+        "shortlists",
+        "creators",
+    ] {
+        let records = |db: &rusqlite::Connection| {
+            let mut query = db.prepare(&format!("SELECT * FROM {table}")).unwrap();
+            let columns = query.column_count();
+            let mut values = query
+                .query_map([], |row| {
+                    (0..columns)
+                        .map(|col| row.get::<_, rusqlite::types::Value>(col))
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            // Compare complete rows independently of either database's query plan.
+            values.sort_by_cached_key(|row| format!("{row:?}"));
+            values
+        };
+        assert_eq!(records(&original), records(&compact), "{table}");
+    }
+    let original = Census::open(&w.db()).unwrap();
+    let compact = Census::open(&destination).unwrap();
+    compact.verify().unwrap();
+    let mut original_csv = Vec::new();
+    let mut compact_csv = Vec::new();
+    original
+        .export_csv(w.entries[0]["file"].as_str().unwrap(), &mut original_csv)
+        .unwrap();
+    compact
+        .export_csv(w.entries[0]["file"].as_str().unwrap(), &mut compact_csv)
+        .unwrap();
+    assert_eq!(original_csv, compact_csv);
+    for (before, after) in w
+        .entries
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip(entries.as_array().unwrap())
+    {
+        let summary = |db: &Census, entry: &Value| {
+            db.resource(entry["summary_file"].as_str().unwrap())
+                .unwrap()
+        };
+        assert_eq!(
+            summary(&original, before)["reports"],
+            summary(&compact, after)["reports"]
+        );
+        if after["kind"] == "aggregate" {
+            continue;
+        }
+        for id in 1..=61 {
+            for key in ["cards_dir", "connections_dir"] {
+                let mut a = original
+                    .resource(&format!("{}/{id}.json", before[key].as_str().unwrap()))
+                    .unwrap();
+                let mut b = compact
+                    .resource(&format!("{}/{id}.json", after[key].as_str().unwrap()))
+                    .unwrap();
+                a.as_object_mut().unwrap().remove("connection_identity");
+                b.as_object_mut().unwrap().remove("connection_identity");
+                assert_eq!(a, b);
+            }
+        }
+        for leaf in ["index.json", "0.json"] {
+            assert_eq!(
+                original
+                    .resource(&format!(
+                        "{}/{leaf}",
+                        before["profile_topics_dir"].as_str().unwrap()
+                    ))
+                    .unwrap(),
+                compact
+                    .resource(&format!(
+                        "{}/{leaf}",
+                        after["profile_topics_dir"].as_str().unwrap()
+                    ))
+                    .unwrap()
+            );
+        }
+    }
+    assert_eq!(fs::read(w.db()).unwrap(), baseline);
+    let approved = fs::read(&destination).unwrap();
+    fs::remove_file(folder.join(".owner.json")).unwrap();
+    assert!(store::publish(&folder, &destination, &json!({"test":true})).is_err());
+    assert_eq!(fs::read(&destination).unwrap(), approved);
+}
+
+#[test]
 fn older_collections_gain_the_discrete_continuity_view_without_rewriting_the_database() {
     let w = Fixture::new("20261001");
     let mut expected = Vec::new();

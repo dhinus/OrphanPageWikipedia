@@ -359,27 +359,11 @@ pub(super) fn write_editorial_exports(
         drop(query);
         drop(insert);
         transaction.commit()?;
-        #[derive(serde::Serialize)]
-        struct Metadata<'a> {
-            format: &'static str,
-            connection_identity: &'a str,
-            metadata: &'a Value,
-            census_page_count: usize,
-        }
-        write_atomic(&path("connections_metadata_file")?, |file| {
-            let mut writer = BufWriter::with_capacity(65536, file);
-            serde_json::to_writer(
-                &mut writer,
-                &Metadata {
-                    format: "connections_metadata_v1",
-                    connection_identity,
-                    metadata: &staged.metadata,
-                    census_page_count: staged.count,
-                },
-            )?;
-            writer.flush()?;
-            Ok(())
-        })?;
+        write_connection_metadata(
+            &path("connections_metadata_file")?,
+            staged,
+            connection_identity,
+        )?;
         write_browser_projection(
             &path("cards_file")?,
             staged,
@@ -388,6 +372,36 @@ pub(super) fn write_editorial_exports(
             true,
             Some(card_identity),
         )
+    })
+}
+
+#[cfg(feature = "cli")]
+fn write_connection_metadata(
+    path: &std::path::Path,
+    staged: &CanonicalExport,
+    connection_identity: &str,
+) -> DumpResult<()> {
+    use std::io::{BufWriter, Write};
+    #[derive(serde::Serialize)]
+    struct Metadata<'a> {
+        format: &'static str,
+        connection_identity: &'a str,
+        metadata: &'a serde_json::Value,
+        census_page_count: usize,
+    }
+    write_atomic(path, |file| {
+        let mut writer = BufWriter::with_capacity(65536, file);
+        serde_json::to_writer(
+            &mut writer,
+            &Metadata {
+                format: "connections_metadata_v1",
+                connection_identity,
+                metadata: &staged.metadata,
+                census_page_count: staged.count,
+            },
+        )?;
+        writer.flush()?;
+        Ok(())
     })
 }
 
@@ -600,6 +614,20 @@ pub fn prepare_dashboard_exports(
     expected: Option<&serde_json::Value>,
     transport_generation: Option<&str>,
 ) -> DumpResult<serde_json::Value> {
+    prepare_exports(source, folder, expected, transport_generation, false)
+}
+
+#[cfg(feature = "cli")]
+// Collection staging keeps the same resource names and source fingerprints,
+// but only writes documents consumed by store::publish. Cards, connections,
+// article queries and topic shards are reconstructed from its relational rows.
+pub(super) fn prepare_exports(
+    source: &std::path::Path,
+    folder: &std::path::Path,
+    expected: Option<&serde_json::Value>,
+    transport_generation: Option<&str>,
+    collection: bool,
+) -> DumpResult<serde_json::Value> {
     crate::runtime::phase("dashboard.member", || {
         crate::runtime::check_cancelled()?;
         use serde_json::json;
@@ -657,37 +685,39 @@ pub fn prepare_dashboard_exports(
             "creator_index_file":format!("{stem}-creators.json")
         });
         let mut prepared = PreparedDirectory::new(folder)?;
-        for (key, format, columns, count) in [
-            (
-                "observations_file",
-                "observations_v1",
-                OBSERVATION_COLUMNS,
-                false,
-            ),
-            (
-                "articles_file",
-                "article_index_v1",
-                ARTICLE_INDEX_COLUMNS,
-                true,
-            ),
-        ] {
-            write_browser_projection(
-                &folder.join(names[key].as_str().ok_or("Nome indice mancante")?),
+        if !collection {
+            for (key, format, columns, count) in [
+                (
+                    "observations_file",
+                    "observations_v1",
+                    OBSERVATION_COLUMNS,
+                    false,
+                ),
+                (
+                    "articles_file",
+                    "article_index_v1",
+                    ARTICLE_INDEX_COLUMNS,
+                    true,
+                ),
+            ] {
+                write_browser_projection(
+                    &folder.join(names[key].as_str().ok_or("Nome indice mancante")?),
+                    &staged,
+                    format,
+                    columns,
+                    count,
+                    None,
+                )?;
+            }
+            write_profile_topics(
+                &folder.join(
+                    names["profile_topics_dir"]
+                        .as_str()
+                        .ok_or("Directory temi mancante")?,
+                ),
                 &staged,
-                format,
-                columns,
-                count,
-                None,
             )?;
         }
-        write_profile_topics(
-            &folder.join(
-                names["profile_topics_dir"]
-                    .as_str()
-                    .ok_or("Directory temi mancante")?,
-            ),
-            &staged,
-        )?;
         let identity = |format: &str| {
             canonical_json_sha256(&json!([
                 format,
@@ -697,13 +727,25 @@ pub fn prepare_dashboard_exports(
                 transport_generation
             ]))
         };
-        write_editorial_exports(
-            folder,
-            &names,
-            &staged,
-            &identity("orphan_cards_v2")?,
-            &identity("connections_v2")?,
-        )?;
+        if collection {
+            write_connection_metadata(
+                &folder.join(
+                    names["connections_metadata_file"]
+                        .as_str()
+                        .ok_or("Nome metadati connessioni mancante")?,
+                ),
+                &staged,
+                &identity("connections_v2")?,
+            )?;
+        } else {
+            write_editorial_exports(
+                folder,
+                &names,
+                &staged,
+                &identity("orphan_cards_v2")?,
+                &identity("connections_v2")?,
+            )?;
+        }
         write_dashboard_summaries(source, folder, &names, &staged)?;
         if file_signature(source)? != staged.signature {
             return Err("Esportazione modificata durante la conversione".into());

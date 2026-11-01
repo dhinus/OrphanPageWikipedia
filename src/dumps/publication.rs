@@ -2,12 +2,35 @@ use super::DumpResult;
 #[cfg(feature = "cli")]
 use super::{
     analyze_imported_graph, analyze_memory_graph, canonical_json_sha256, export_csv, file_sha256,
-    file_signature, first_metadata, prepare_dashboard_exports, resolved_path, topic_time,
-    write_aggregate_summary, write_atomic, AnalysisOptions, DumpClient, WikimediaHttp,
+    file_signature, first_metadata, resolved_path, topic_time, write_aggregate_summary,
+    write_atomic, AnalysisOptions, DumpClient, WikimediaHttp,
 };
 
 #[cfg(feature = "cli")]
 pub(super) const TRANSPORT_RULE: &str = "dashboard_transports_v4";
+
+#[cfg(feature = "cli")]
+pub(crate) const COLLECTION_STAGING: &str = "relational_collection_staging_v1";
+
+/// Only the pipeline's marked, identity-named private export directory may
+/// omit file transports that the relational service reconstructs from rows.
+#[cfg(feature = "cli")]
+pub(crate) fn collection_staging(folder: &std::path::Path) -> DumpResult<bool> {
+    let bytes = match std::fs::read(folder.join(".owner.json")) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error.into()),
+    };
+    let identity: serde_json::Value = serde_json::from_slice(&bytes)?;
+    let hash = canonical_json_sha256(&identity)?;
+    let expected = format!(".collection-{}-exports", &hash[..16]);
+    if identity["rule"] != crate::store::RULE
+        || folder.file_name().and_then(|s| s.to_str()) != Some(expected.as_str())
+    {
+        return Err("Identità dell'area di esportazione della raccolta non valida".into());
+    }
+    Ok(true)
+}
 
 #[cfg(feature = "cli")]
 pub(super) struct PreparedDirectory {
@@ -284,18 +307,39 @@ pub(super) fn prepare_member(
         source.as_path()
     };
     let metadata = first_metadata(canonical)?;
-    let csv = source.with_extension("csv");
-    export_csv(canonical, &csv)?;
-    reuse_export(&csv, &output.with_extension("csv"), &mut reused)?;
+    let collection = collection_staging(output.parent().ok_or("Directory output mancante")?)?;
+    if !collection {
+        let csv = source.with_extension("csv");
+        export_csv(canonical, &csv)?;
+        reuse_export(&csv, &output.with_extension("csv"), &mut reused)?;
+    }
     let transports = prepared.path.join("transports");
-    let names = prepare_dashboard_exports(canonical, &transports, None, Some(generation))?;
-    for name in names.as_object().ok_or("Trasporti non validi")?.values() {
+    let names = super::transports::prepare_exports(
+        canonical,
+        &transports,
+        None,
+        Some(generation),
+        collection,
+    )?;
+    for (key, name) in names.as_object().ok_or("Trasporti non validi")? {
+        if collection
+            && !matches!(
+                key.as_str(),
+                "summary_file" | "creator_index_file" | "connections_metadata_file"
+            )
+        {
+            continue;
+        }
         let name = name.as_str().ok_or("Nome trasporto mancante")?;
         std::fs::rename(transports.join(name), prepared.path.join(name))?;
     }
     std::fs::remove_dir(transports)?;
+    let mut entry = manifest_entry(&metadata, name, Some(&names))?;
+    if collection {
+        entry["storage"] = json!(COLLECTION_STAGING);
+    }
     Ok(PreparedMember {
-        entry: manifest_entry(&metadata, name, Some(&names))?,
+        entry,
         metadata,
         reused,
     })
@@ -427,15 +471,16 @@ pub fn analyze_file(
     })
 }
 
-/// Regenerate every approved member's transports, retaining aggregate entries
-/// and canonical JSON/CSV. No approved file is overwritten; the manifest moves
-/// only after every new file and empty transport directory is installed.
+/// Regenerate approved derived resources, retaining aggregate entries and
+/// canonical JSON/CSV. Marked collection staging writes only required documents.
+/// No approved file is overwritten; the manifest moves after the new resources.
 #[cfg(feature = "cli")]
 pub fn rebuild_dashboard(folder: &std::path::Path) -> DumpResult<()> {
     crate::runtime::phase("dashboard.convert", || {
         crate::runtime::check_cancelled()?;
         use serde_json::Value;
         let original = std::fs::read(folder.join("manifest.json"))?;
+        let collection = collection_staging(folder)?;
         let mut manifest: Vec<Value> = serde_json::from_slice(&original)?;
         if manifest.is_empty() {
             return Err("Manifest non valido".into());
@@ -460,9 +505,22 @@ pub fn rebuild_dashboard(folder: &std::path::Path) -> DumpResult<()> {
             let source = folder.join(dataset_filename(&entry["file"])?);
             sources.push((source.clone(), file_signature(&source)?));
             let member = prepared.path.join(format!("member-{position}"));
-            let names =
-                prepare_dashboard_exports(&source, &member, Some(entry), Some(&generation))?;
-            for name in names.as_object().ok_or("Trasporti non validi")?.values() {
+            let names = super::transports::prepare_exports(
+                &source,
+                &member,
+                Some(entry),
+                Some(&generation),
+                collection,
+            )?;
+            for (key, name) in names.as_object().ok_or("Trasporti non validi")? {
+                if collection
+                    && !matches!(
+                        key.as_str(),
+                        "summary_file" | "creator_index_file" | "connections_metadata_file"
+                    )
+                {
+                    continue;
+                }
                 let name = name.as_str().ok_or("Nome trasporto non valido")?;
                 if files.contains(name) || name == "manifest.json" {
                     return Err("Trasporto sovrapposto a un dataset".into());
@@ -474,6 +532,9 @@ pub fn rebuild_dashboard(folder: &std::path::Path) -> DumpResult<()> {
                 .as_object_mut()
                 .ok_or("Voce del manifest non valida")?
                 .extend(names.as_object().ok_or("Trasporti non validi")?.clone());
+            if collection {
+                entry["storage"] = serde_json::json!(COLLECTION_STAGING);
+            }
         }
         for entry in manifest.iter_mut().filter(|e| e["kind"] == "aggregate") {
             let name = dataset_filename(&entry["file"])?;

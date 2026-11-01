@@ -75,6 +75,59 @@ fn census(db: &Connection, table: &str) -> usize {
 }
 
 #[test]
+fn marked_collection_publication_skips_duplicate_transports_and_keeps_scientific_exports() {
+    let w = Workspace::new();
+    let mut db = Connection::open("").unwrap();
+    comparison_schema(&db).unwrap();
+    w.stage(&mut db, &graph("vec", &[], 8));
+    w.stage(&mut db, &graph("lmo", &[(2, vec![1]), (3, vec![1])], 8));
+    match_comparison(&mut db).unwrap();
+    let identity = json!({"rule":orphanwiki::store::RULE,"test":true});
+    let hash = orphanwiki::dumps::canonical_json_sha256(&identity).unwrap();
+    let folder = w.0.join(format!(".collection-{}-exports", &hash[..16]));
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join(".owner.json"), identity.to_string()).unwrap();
+    let index = orphanwiki::dumps::publish_comparison(&db, &folder).unwrap();
+    let entries: Value =
+        serde_json::from_slice(&fs::read(folder.join("manifest.json")).unwrap()).unwrap();
+    for member in index["members"].as_array().unwrap() {
+        let language = member["language"].as_str().unwrap();
+        let file = member["file"].as_str().unwrap();
+        let entry = entries
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|e| e["file"] == file)
+            .unwrap();
+        assert_eq!(entry["storage"], "relational_collection_staging_v1");
+        assert!(!folder.join(file).with_extension("csv").exists());
+        for key in [
+            "cards_dir",
+            "connections_dir",
+            "profile_topics_dir",
+            "observations_file",
+            "cards_file",
+            "articles_file",
+        ] {
+            assert!(!folder.join(entry[key].as_str().unwrap()).exists());
+        }
+        let expected = w.0.join("expected.json");
+        export_comparison_member(&db, language, &expected).unwrap();
+        assert_eq!(
+            fs::read(folder.join(file)).unwrap(),
+            fs::read(expected).unwrap()
+        );
+        for key in [
+            "summary_file",
+            "creator_index_file",
+            "connections_metadata_file",
+        ] {
+            assert!(folder.join(entry[key].as_str().unwrap()).is_file());
+        }
+    }
+}
+
+#[test]
 fn all_ordered_pairs_keep_evidence_dead_end_rank_and_zero_outcomes() {
     let w = Workspace::new();
     let mut db = Connection::open("").unwrap();

@@ -1,7 +1,7 @@
 use super::benchmark::{
     benchmark_outputs, benchmark_summary, canonical_fingerprint, local_output, BenchmarkOutput,
 };
-use super::checkpoints::signature;
+use super::checkpoints::{approved_outputs, signature};
 use super::workflow::{remove_downloads, workflow};
 use super::*;
 
@@ -451,6 +451,60 @@ fn relational_collection_is_atomic_resumable_and_removes_only_its_own_files() {
     assert!(collection_workflow(&f.options, &mut f.steps).is_err());
     assert_eq!(std::fs::read(&destination).unwrap(), approved);
     assert_eq!(db.manifest().unwrap().as_array().unwrap().len(), 3);
+}
+
+#[test]
+fn private_collection_outputs_reuse_virtual_resources_only_with_verified_ownership() {
+    let mut f = Fixture::new();
+    f.options.selected.push(("lmo".into(), "lmowiki".into()));
+    f.run().unwrap();
+    let identity = json!({"rule":crate::store::RULE,"test":"private outputs"});
+    let hash = dumps::canonical_json_sha256(&identity).unwrap();
+    let folder = f.root.join(format!(".collection-{}-exports", &hash[..16]));
+    std::fs::rename(&f.options.output_dir, &folder).unwrap();
+    write(&folder.join(".owner.json"), &identity);
+    dumps::rebuild_dashboard(&folder).unwrap();
+    dumps::publish_available_aggregate(&folder)
+        .unwrap()
+        .unwrap();
+    let entries = read_json(&folder.join("manifest.json")).unwrap();
+    let entries = entries.as_array().unwrap();
+    let files = entries
+        .iter()
+        .filter(|e| e["kind"] != "aggregate")
+        .map(|e| {
+            (
+                e["language"].as_str().unwrap().to_owned(),
+                e["file"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    assert!(approved_outputs(&folder, entries, &files));
+    for entry in entries.iter().filter(|e| e["kind"] != "aggregate") {
+        assert!(!folder.join(entry["cards_file"].as_str().unwrap()).exists());
+        assert!(!folder
+            .join(entry["connections_dir"].as_str().unwrap())
+            .exists());
+    }
+    std::fs::remove_file(folder.join(".owner.json")).unwrap();
+    assert!(!approved_outputs(&folder, entries, &files));
+    let manifest = std::fs::read(folder.join("manifest.json")).unwrap();
+    write(
+        &folder.join(".owner.json"),
+        &json!({"rule":crate::store::RULE,"test":"tampered"}),
+    );
+    assert!(dumps::rebuild_dashboard(&folder).is_err());
+    assert_eq!(
+        std::fs::read(folder.join("manifest.json")).unwrap(),
+        manifest
+    );
+    write(&folder.join(".owner.json"), &identity);
+    let shared = entries.iter().find(|e| e["kind"] != "aggregate").unwrap()
+        ["connections_metadata_file"]
+        .as_str()
+        .unwrap();
+    std::fs::remove_file(folder.join(shared)).unwrap();
+    assert!(!approved_outputs(&folder, entries, &files));
 }
 
 #[test]

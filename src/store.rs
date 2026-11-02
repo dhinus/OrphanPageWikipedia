@@ -174,6 +174,38 @@ pub struct Census {
 }
 
 impl Census {
+    /// Bounded publication-receipt checks, without scanning scientific rows.
+    /// This does not replace full content verification during publication/reuse.
+    pub fn verify_metadata(&self) -> DumpResult<()> {
+        let checksum: String = self.db.query_row(
+            "SELECT data FROM publication WHERE key='integrity_sha256'",
+            [],
+            |r| r.get(0),
+        )?;
+        if checksum.len() != 64
+            || !checksum
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+        {
+            return Err("Impronta della raccolta pubblicata non valida".into());
+        }
+        if !self.identity()?.is_object() {
+            return Err("Identità della raccolta pubblicata non valida".into());
+        }
+        let manifest = self.manifest()?;
+        let entries = manifest
+            .as_array()
+            .filter(|entries| !entries.is_empty())
+            .ok_or("Manifest della raccolta pubblicata mancante")?;
+        if entries
+            .iter()
+            .any(|entry| entry["storage"] != RULE || filename(&entry["file"]).is_err())
+        {
+            return Err("Manifest della raccolta pubblicata non valido".into());
+        }
+        Ok(())
+    }
+
     /// Full bounded verification is for publication/reuse, never each HTTP query.
     pub fn verify(&self) -> DumpResult<()> {
         let expected: String = self.db.query_row(

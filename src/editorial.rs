@@ -155,6 +155,7 @@ fn directory(value: &str) -> bool {
 pub struct ReviewApplication {
     web_root: PathBuf,
     collection_database: PathBuf,
+    verify_collection: bool,
     database: ReviewDatabase,
     oauth: Option<OAuthConfig>,
     sessions: Arc<Mutex<BTreeMap<String, LoginSession>>>,
@@ -164,6 +165,7 @@ impl ReviewApplication {
     pub fn new(web_root: PathBuf, database: ReviewDatabase) -> Self {
         Self {
             collection_database: web_root.join("data/collection.sqlite"),
+            verify_collection: true,
             web_root,
             database,
             oauth: None,
@@ -173,6 +175,13 @@ impl ReviewApplication {
 
     pub fn with_collection_database(mut self, path: PathBuf) -> Self {
         self.collection_database = path;
+        self
+    }
+
+    /// Disable only the startup content scan; publication always verifies the
+    /// complete collection before it can replace the active database.
+    pub fn with_collection_verification(mut self, enabled: bool) -> Self {
+        self.verify_collection = enabled;
         self
     }
 
@@ -212,7 +221,17 @@ pub fn serve(
     bind: &str,
     port: u16,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    crate::store::Census::open(&app.collection_database)?.verify()?;
+    {
+        let collection = crate::store::Census::open(&app.collection_database)?;
+        collection.verify_metadata()?;
+        if app.verify_collection {
+            eprintln!("Verifica completa della raccolta: {}. Attendere prima dell'apertura della porta HTTP.", app.collection_database.display());
+            collection.verify()?;
+            eprintln!("Verifica completa della raccolta terminata.");
+        } else {
+            eprintln!("Metadati della raccolta verificati; scansione completa all'avvio saltata su richiesta.");
+        }
+    }
     if let ReviewDatabase::Sqlite(path) = &app.database {
         if crate::dumps::resolved_path(path)?
             == crate::dumps::resolved_path(&app.collection_database)?

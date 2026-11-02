@@ -512,6 +512,95 @@ fn stale_derived_indices_and_modified_database_content_are_detected() {
 }
 
 #[test]
+fn startup_scan_is_optional_but_publication_metadata_and_default_verification_remain_required() {
+    struct Server(std::process::Child);
+    impl Drop for Server {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let w = Fixture::new("20261001");
+    w.publish();
+    let published = fs::read(w.db()).unwrap();
+    // A validly formatted but mismatching receipt distinguishes an actual
+    // content scan from the bounded metadata checks without timing assertions.
+    let db = rusqlite::Connection::open(w.db()).unwrap();
+    db.execute(
+        "UPDATE publication SET data=? WHERE key='integrity_sha256'",
+        ["0".repeat(64)],
+    )
+    .unwrap();
+    drop(db);
+    Census::open(&w.db()).unwrap().verify_metadata().unwrap();
+    let before = fs::read(w.db()).unwrap();
+    let command = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_orphanwiki"));
+        command
+            .args([
+                "serve",
+                "--collection-database",
+                "collection.sqlite",
+                "--port",
+                "0",
+            ])
+            .env_clear()
+            .current_dir(&w.root);
+        command
+    };
+    let output = command().output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr)
+        .contains("Checksum della raccolta non corrispondente"));
+    let mut server = Server(
+        command()
+            .arg("--skip-collection-verification")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
+    let mut line = String::new();
+    std::io::BufReader::new(server.0.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    let url = line.trim().strip_prefix("Dashboard: ").unwrap();
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .unwrap();
+    let manifest: Value = serde_json::from_slice(
+        &client
+            .get(format!("{url}/data/manifest.json"))
+            .send()
+            .unwrap()
+            .bytes()
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest.as_array().unwrap().len(), 3);
+    drop(server);
+    assert_eq!(fs::read(w.db()).unwrap(), before);
+    for sql in [
+        "DELETE FROM publication WHERE key='integrity_sha256'",
+        "UPDATE publication SET data='invalid' WHERE key='integrity_sha256'",
+        "DELETE FROM documents WHERE path='manifest.json'",
+        "UPDATE publication SET data='null' WHERE key='identity'",
+        "UPDATE publication SET data='unsupported' WHERE key='rule'",
+    ] {
+        fs::write(w.db(), &published).unwrap();
+        let db = rusqlite::Connection::open(w.db()).unwrap();
+        db.execute_batch(sql).unwrap();
+        drop(db);
+        let output = command()
+            .arg("--skip-collection-verification")
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{sql}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("Dashboard:"));
+    }
+}
+
+#[test]
 fn http_dashboard_queries_downloads_and_reviews_work_with_only_the_database() {
     struct Server(std::process::Child);
     impl Drop for Server {

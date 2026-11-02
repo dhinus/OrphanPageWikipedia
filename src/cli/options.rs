@@ -130,6 +130,12 @@ pub(crate) fn command() -> Command {
         .arg(option("web-root"))
         .arg(option("database"))
         .arg(option("collection-database"))
+        .arg(
+            Arg::new("skip-collection-verification")
+                .long("skip-collection-verification")
+                .action(ArgAction::SetTrue)
+                .help("Salta la scansione completa all'avvio di una raccolta già verificata alla pubblicazione"),
+        )
         .arg(option("bind").default_value("127.0.0.1"))
         .arg(
             option("port")

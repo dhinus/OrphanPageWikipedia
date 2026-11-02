@@ -14,7 +14,8 @@ impl Invocation {
             .unwrap_or_else(|| "web".into());
         let mut app =
             orphanwiki::editorial::ReviewApplication::new(self.root.join(web_root), database)
-                .with_oauth_from_environment()?;
+                .with_oauth_from_environment()?
+                .with_collection_verification(!self.args.get_flag("skip-collection-verification"));
         if let Some(path) = self.args.get_one::<String>("collection-database") {
             orphanwiki::store::Census::open(&self.root.join(path)).map_err(|e| e.to_string())?;
             app = app.with_collection_database(self.root.join(path));

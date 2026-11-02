@@ -198,11 +198,12 @@ impl Census {
         if request.kind == "cards" {
             order = format!("reviewed,{order}");
         }
-        bindings.push(PAGE_SIZE.into());
+        let page_size = request.page_size();
+        bindings.push(page_size.into());
         bindings.push(request.offset.into());
         let mut query=self.db.prepare(&format!("{prefix} SELECT language,id,data,title,orphan FROM listed{filter} ORDER BY {order}title_fold,title,id,language LIMIT ? OFFSET ?"))?;
         let mut rows = query.query(rusqlite::params_from_iter(bindings))?;
-        let mut pages = Vec::with_capacity(PAGE_SIZE as usize);
+        let mut pages = Vec::with_capacity(page_size as usize);
         let mut records = serde_json::Map::new();
         let mut transports = serde_json::Map::new();
         while let Some(row) = rows.next()? {
@@ -338,6 +339,14 @@ fn default_order() -> String {
     "title-asc".into()
 }
 impl PageQuery {
+    fn page_size(&self) -> i64 {
+        if self.kind == "cards" {
+            16
+        } else {
+            PAGE_SIZE
+        }
+    }
+
     pub(super) fn validate(&self) -> DumpResult<()> {
         if !matches!(self.kind.as_str(), "articles" | "cards" | "creators")
             || !matches!(
@@ -362,7 +371,7 @@ impl PageQuery {
                     | "personalized"
             )
             || self.offset < 0
-            || self.offset % PAGE_SIZE != 0
+            || self.offset % self.page_size() != 0
             || self.edits.len() > 100
             || self.closed_pairs.len() > 100000
             || self.hidden_categories.len() > 128

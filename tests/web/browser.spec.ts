@@ -86,7 +86,7 @@ async function open(page: Page, site: string, filename: string): Promise<void> {
   await page.goto(`${site}/${filename}?dataset=fixture.json${filename === 'connections.html' ? '&page=1' : ''}`);
   await expect(page.locator('body')).toHaveAttribute('data-loading', 'false');
   // Cards hydrate after the index: inspect layout only when their controls are ready.
-  if (filename === 'deorphanize.html') await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(25);
+  if (filename === 'deorphanize.html') await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(16);
 }
 
 async function inspectPagination(page: Page,testInfo: TestInfo,prefix: string) {
@@ -126,14 +126,14 @@ test('four pages load real assets, charts and prepared records', async ({page, s
   await page.locator('#creator-search').fill('creator:31');
   await expect(page.locator('#creator-rows tr')).toHaveCount(1);
   await page.locator('#deorphanize-link').click();
-  await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
-  await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(25);
+  await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
+  await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(16);
   await page.locator('#candidate-more').click();
-  await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(7);
-  await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(7);
-  await expect(page.locator('#candidate-info')).toContainText('Pagina 2 di 2');
+  await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
+  await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(16);
+  await expect(page.locator('#candidate-info')).toContainText('Risultati 17–32 · Pagina 2 di 2');
   await inspectPagination(page,testInfo,'candidate');
-  await page.locator('#candidate-previous').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
+  await page.locator('#candidate-previous').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
   await page.locator('#candidate-search').fill(title(1));
   await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(1);
   await page.locator('#candidate-cards a[href*="connections.html"]').click();
@@ -250,7 +250,7 @@ test('hidden pages opens independent options with keyboard and mobile support', 
     await expect(disambiguation).not.toBeChecked();
     await expect(redirects).not.toBeChecked();
     await expect(connections).not.toBeChecked();
-    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
+    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
     const bounds = await options.boundingBox();
     expect(bounds).not.toBeNull();
     assert(bounds);
@@ -286,7 +286,7 @@ test('hidden pages opens independent options with keyboard and mobile support', 
     await sourceFilter.uncheck();
     await button.click();
     await expect(options).toBeHidden();
-    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
+    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
   }
   expect(traffic.editorial).toEqual([]);
 });
@@ -372,7 +372,7 @@ test('additional LLM providers retain their selection and expose plain chat link
     await page.locator('#llm-provider').selectOption(provider);
     expect(traffic.editorial).toHaveLength(calls);
     await page.reload();
-    await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(25);
+    await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(16);
     await expect(page.locator('#llm-provider')).toHaveValue(provider);
     expect(traffic.editorial).toHaveLength(calls);
     await page.locator('#candidate-cards button.fix-link').first().click();
@@ -439,12 +439,13 @@ test('database alone serves paginated articles, creators and cards on desktop an
     await page.locator('#creator-previous').click();await expect(page.locator('#creator-rows tr')).toHaveCount(25);
     await page.locator('#creator-more').click();await expect(page.locator('#creator-rows tr')).toHaveCount(7);
     await page.locator('#creator-search').fill('creator:31');await expect(page.locator('#creator-rows tr')).toHaveCount(1);
-    await page.locator('#deorphanize-link').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
-    await page.locator('#candidate-more').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(7);
+    await page.locator('#deorphanize-link').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
+    await page.locator('#candidate-more').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
     await expect(page.locator('#candidate-more')).toBeDisabled();
-    await page.locator('#candidate-previous').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(25);
+    await page.locator('#candidate-previous').click();await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
+    await expect(page.locator('#candidate-more')).toBeEnabled();
     await page.locator('#candidate-more').focus();await page.keyboard.press('Enter');
-    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(7);
+    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
     await inspectPagination(page,testInfo,'candidate');
     for(const width of [1280,390]) {
       await page.setViewportSize({width,height:844});
@@ -456,12 +457,13 @@ test('database alone serves paginated articles, creators and cards on desktop an
     }
     await page.locator('#ui-language-toggle').click();await expect(page.locator('html')).toHaveAttribute('lang','en');
     await page.locator('#theme-toggle').click();await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
-    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(7);
+    await expect(page.locator('#candidate-cards .candidate-card')).toHaveCount(16);
     await expect(page.locator('#candidate-info')).toContainText('Page 2 of 2');
     await expect(page.locator('#candidate-more')).toHaveText('Next');
     await page.locator('nav.list-pagination').scrollIntoViewIfNeeded();
     await page.screenshot({path:testInfo.outputPath('database-mobile-dark.png')});
     expect(resources.some(url=>url.endsWith('/data/fixture.json')||url.includes('-articles.json')||url.includes('-cards-v2.json')||url.includes('-creators.json'))).toBe(false);
-    expect(queries.some(value=>record(value)&&value.offset===25)).toBe(true);
+    expect(queries.some(value=>record(value)&&value.kind==='articles'&&value.offset===25)).toBe(true);
+    expect(queries.some(value=>record(value)&&value.kind==='cards'&&value.offset===16)).toBe(true);
     expect(traffic.editorial).toEqual([]);
 });

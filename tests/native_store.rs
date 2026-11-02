@@ -294,7 +294,8 @@ fn pagination_uses_summary_identity_without_rebuilding_unrelated_charts() {
     let mut expected = Vec::new();
     for dataset in [w.entries[0]["file"].as_str().unwrap(), "all.json"] {
         for kind in ["articles", "cards", "creators"] {
-            for offset in [0, 25, 50] {
+            let page_size = if kind == "cards" { 16 } else { 25 };
+            for offset in [0, page_size, 2 * page_size] {
                 let mut request = w.request(kind);
                 request.dataset = dataset.into();
                 request.offset = offset;
@@ -388,7 +389,10 @@ fn relational_queries_preserve_full_census_missing_values_filters_and_every_edge
         assert!(![2, 3, 4, 5].contains(&p["page_id"].as_i64().unwrap()));
     }
     let closed = vec![("vec".into(), 1, 101), ("vec".into(), 1, 102)];
-    cards.offset = 50;
+    assert_eq!(visible["pages"].as_array().unwrap().len(), 16);
+    cards.offset = 25;
+    assert!(db.query(&cards, &[]).is_err());
+    cards.offset = 48;
     let sorted = db.query(&cards, &closed).unwrap();
     assert_eq!(
         sorted["pages"].as_array().unwrap().last().unwrap()["page_id"],
@@ -720,7 +724,7 @@ fn http_dashboard_queries_downloads_and_reviews_work_with_only_the_database() {
         .unwrap();
     assert_eq!(response.status(), 200);
     let result: Value = serde_json::from_slice(&response.bytes().unwrap()).unwrap();
-    assert_eq!(result["pages"].as_array().unwrap().len(), 25);
+    assert_eq!(result["pages"].as_array().unwrap().len(), 16);
     let response = client
         .get(format!(
             "{url}/api/export?dataset={}",

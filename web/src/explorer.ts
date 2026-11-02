@@ -5,7 +5,7 @@ import {canonicalJSON,validateDataset} from './datasets.js';
 import {isRecord} from './validation.js';
 import {editorialReviews} from './editorial.js';
 export type RemoteKind='articles'|'cards'|'creators';
-const listPageSize=25;
+const listPageSize=(kind: RemoteKind)=>kind==='cards'?16:25;
 interface RemoteList {
   key: string; offset: number; total: number; pages: PageObservation[]; creators: CreatorRow[];
   records: Record<string,CandidateRecord>; transports: Record<string,CardTransport>;
@@ -43,12 +43,13 @@ function changeListPage(kind: RemoteKind,offset: number,focusPage=false) {
 function stepListPage(kind: RemoteKind,direction: number) {
   if(direction>0&&remoteOffset!==remoteList?.offset) {
     (()=>context.render(kind))();
-  } else if(remoteList)changeListPage(kind,remoteList.offset+direction*listPageSize,true);
+  } else if(remoteList)changeListPage(kind,remoteList.offset+direction*listPageSize(kind),true);
 }
 function listPagination(kind: RemoteKind,list: {offset: number; total: number},busy=false) {
+  const pageSize=listPageSize(kind);
   const prefix=kind==='cards'?'candidate':kind==='creators'?'creator':'article';
   const previous=$(prefix+'-previous') as HTMLButtonElement,more=$(prefix+'-more') as HTMLButtonElement,numbers=$(prefix+'-pages')!;
-  const current=Math.floor(list.offset/listPageSize)+1,total=Math.ceil(list.total/listPageSize);
+  const current=Math.floor(list.offset/pageSize)+1,total=Math.ceil(list.total/pageSize);
   previous.hidden=more.hidden=numbers.hidden=total<=1;
   previous.disabled=busy||list.offset===0;more.disabled=busy||current>=total;
   more.dataset.i18n='Successiva';more.textContent=t('Successiva');
@@ -62,14 +63,14 @@ function listPagination(kind: RemoteKind,list: {offset: number; total: number},b
     const button=element('button',number(page));button.type='button';button.disabled=busy;
     button.setAttribute('aria-label',t('Pagina {page}',{page:number(page)}));
     if(page===current)button.setAttribute('aria-current','page');
-    button.addEventListener('click',()=>changeListPage(kind,(page-1)*listPageSize,true));
+    button.addEventListener('click',()=>changeListPage(kind,(page-1)*pageSize,true));
     numbers.append(button);last=page;
     if(page===current&&paginationFocus&&!busy){button.focus();paginationFocus=false;}
   }
 }
-function listRange(total: number,offset: number,shown: number): string {
+function listRange(kind: RemoteKind,total: number,offset: number,shown: number): string {
   return total?' · '+t('Risultati {from}–{to} · Pagina {page} di {pages}',
-    {from:number(offset+1),to:number(offset+shown),page:number(offset/listPageSize+1),pages:number(Math.ceil(total/listPageSize))}):'';
+    {from:number(offset+1),to:number(offset+shown),page:number(offset/listPageSize(kind)+1),pages:number(Math.ceil(total/listPageSize(kind)))}):'';
 }
 
 function databaseList(kind: RemoteKind,render: ()=>void): boolean {
@@ -77,6 +78,7 @@ function databaseList(kind: RemoteKind,render: ()=>void): boolean {
   listHydration=loadDatabaseList(kind,render);void listHydration.catch(context.fail);return true;
 }
 async function loadDatabaseList(kind: RemoteKind,render: ()=>void): Promise<void> {
+  const pageSize=listPageSize(kind);
   const prefix=kind==='cards'?'candidate':kind==='creators'?'creator':'article';
   const field=(id: keyof UIElements)=>{const node=$(id);return node&&'value' in node?String(node.value):'';};
   const request={dataset:context.datasetFile,kind,search:field((prefix+'-search') as keyof UIElements),
@@ -105,7 +107,7 @@ async function loadDatabaseList(kind: RemoteKind,render: ()=>void): Promise<void
     const shown=kind==='creators'?list.creators.length:list.pages.length;
     if(kind!=='creators')info.textContent=t(kind==='cards'?'{n} orfane corrispondenti · {shown} schede visualizzate':'{n} voci · {shown} visualizzate',{n:number(list.total),shown:number(shown)});
     else info.textContent=context.creatorListInfo(list.total,shown);
-    info.textContent+=listRange(list.total,list.offset,shown);
+    info.textContent+=listRange(kind,list.total,list.offset,shown);
     listPagination(kind,list);
   }
   if(remoteList?.key===key&&remoteList.offset===offset) {
@@ -127,11 +129,11 @@ async function loadDatabaseList(kind: RemoteKind,render: ()=>void): Promise<void
     const next: RemoteList={key,offset,total:0,pages:[],creators:[],records:{},transports:{}};
     next.total=Number(payload.total);
     if(kind==='creators') {
-      if(payload.format!=='creator_results_v1'||!Array.isArray(payload.creators)||payload.creators.length>listPageSize||
+      if(payload.format!=='creator_results_v1'||!Array.isArray(payload.creators)||payload.creators.length>pageSize||
         payload.creators.some(row=>!isRecord(row)||typeof row.key!=='string'||!Number.isSafeInteger(row.total)||!Number.isSafeInteger(row.orphans)||!Array.isArray(row.languages)))throw new Error('Indice dei creatori non valido');
       next.creators.push(...payload.creators as CreatorRow[]);
     } else {
-      if(payload.format!=='page_results_v1'||!Array.isArray(payload.pages)||payload.pages.length>listPageSize||
+      if(payload.format!=='page_results_v1'||!Array.isArray(payload.pages)||payload.pages.length>pageSize||
         canonicalJSON(payload.metadata)!==canonicalJSON(context.data.metadata)||payload.census_page_count!==context.precomputed?.census_page_count||
         !isRecord(payload.link_candidates)||!isRecord(payload.card_transports))throw new Error('Indice degli articoli non valido');
       if(payload.pages.some(page=>!isRecord(page)||!Number.isSafeInteger(page.page_id)||Number(page.page_id)<=0||typeof page.title!=='string'||typeof page.orphan!=='boolean'))throw new Error('Indice degli articoli non valido');
@@ -146,9 +148,9 @@ async function loadDatabaseList(kind: RemoteKind,render: ()=>void): Promise<void
       if(new Set(next.pages.map(context.pageKey)).size!==next.pages.length)throw new Error('Indice degli articoli non valido');
     }
     const loaded=kind==='creators'?next.creators.length:next.pages.length;
-    if(loaded!==Math.min(listPageSize,Math.max(0,next.total-offset)))throw new Error('Indice degli articoli non valido');
+    if(loaded!==Math.min(pageSize,Math.max(0,next.total-offset)))throw new Error('Indice degli articoli non valido');
     if(offset>0&&offset>=next.total) {
-      remoteOffset=Math.max(0,Math.floor((next.total-1)/listPageSize)*listPageSize);
+      remoteOffset=Math.max(0,Math.floor((next.total-1)/pageSize)*pageSize);
       await loadDatabaseList(kind,render);return;
     }
     remoteList=next;display(next);

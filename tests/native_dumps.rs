@@ -119,11 +119,46 @@ impl DumpHttp for Fixture {
 }
 
 fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", sha2::Sha256::digest(bytes))
+    orphanwiki::dumps::hex_digest(sha2::Sha256::digest(bytes))
 }
 fn sha1(bytes: &[u8]) -> String {
-    format!("{:x}", sha1::Sha1::digest(bytes))
+    orphanwiki::dumps::hex_digest(sha1::Sha1::digest(bytes))
 }
+
+#[test]
+fn checksum_upgrade_preserves_standard_vectors_and_publisher_verification() {
+    use orphanwiki::dumps::{canonical_json_sha256, hex_digest};
+
+    assert_eq!(hex_digest([0, 1, 15, 16, 127, 128, 255]), "00010f107f80ff");
+    let one = "a9993e364706816aba3e25717850c26c9cd0d89d";
+    let two = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+    assert_eq!(sha1(b"abc"), one);
+    assert_eq!(sha256(b"abc"), two);
+    assert_eq!(
+        hex_digest(sha2::Sha512::digest(b"abc")),
+        concat!(
+            "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a",
+            "2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+        )
+    );
+    assert_eq!(
+        canonical_json_sha256(&Value::Null).unwrap(),
+        "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b"
+    );
+    let work = Workspace::new();
+    let path = work.0.join("checksum-fixture");
+    fs::write(&path, b"abc").unwrap();
+    assert_eq!(
+        DumpClient::<Fixture>::verified_sha256(&path, Some(one), Some(two)).unwrap(),
+        Some(two.into())
+    );
+    fs::write(&path, b"changed").unwrap();
+    assert_eq!(
+        DumpClient::<Fixture>::verified_sha256(&path, Some(one), Some(two)).unwrap(),
+        None
+    );
+}
+
 fn compress(bytes: &[u8]) -> Vec<u8> {
     let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::best());
     encoder.write_all(bytes).unwrap();

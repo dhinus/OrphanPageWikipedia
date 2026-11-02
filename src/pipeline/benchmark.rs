@@ -160,7 +160,7 @@ pub(super) fn canonical_fingerprint(path: &Path, language: Option<&str>) -> Pipe
         return Err("Output benchmark senza voci".into());
     }
     Ok(
-        json!({"sha256":format!("{:x}",digest.0.finalize()), "pages":pages,"targets":targets,"candidates":candidates,"reference_edges":reference_edges}),
+        json!({"sha256":crate::dumps::hex_digest(digest.0.finalize()), "pages":pages,"targets":targets,"candidates":candidates,"reference_edges":reference_edges}),
     )
 }
 
@@ -448,7 +448,7 @@ pub fn benchmark(options: BenchmarkOptions) -> PipelineResult<u8> {
         }
         variants.insert(name.into(),json!({"cwd":cwd,"commands":variant.commands,
             "git_revision":git_output(&cwd,&["rev-parse","HEAD"]).and_then(|v|String::from_utf8(v).ok()).map(|s|s.trim().to_owned()),
-            "tracked_diff_sha256":git_output(&cwd,&["diff","HEAD"]).map(|v|format!("{:x}",sha2::Sha256::digest(v))),"executables_sha256":executables}));
+            "tracked_diff_sha256":git_output(&cwd,&["diff","HEAD"]).map(|v|crate::dumps::hex_digest(sha2::Sha256::digest(v))),"executables_sha256":executables}));
         commands.insert(name, (cwd, resolved));
     }
     let output = options.root.join(&options.output_dir);

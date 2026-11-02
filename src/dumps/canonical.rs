@@ -672,6 +672,19 @@ impl std::io::Write for CanonicalDigest {
     }
 }
 
+/// Encode checksum bytes as lowercase hexadecimal, retaining leading zeroes.
+#[cfg(feature = "cli")]
+pub fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let bytes = bytes.as_ref();
+    let mut result = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        result.push(char::from(HEX[usize::from(byte >> 4)]));
+        result.push(char::from(HEX[usize::from(byte & 15)]));
+    }
+    result
+}
+
 /// Hash the canonical value without serializing the complete document in RAM.
 #[cfg(feature = "cli")]
 pub fn canonical_json_sha256(value: &serde_json::Value) -> DumpResult<String> {
@@ -683,7 +696,7 @@ pub fn canonical_json_sha256(value: &serde_json::Value) -> DumpResult<String> {
         write_canonical_json(value, &mut writer)?;
         writer.flush()?;
     }
-    Ok(format!("{:x}", digest.0.finalize()))
+    Ok(crate::dumps::hex_digest(digest.0.finalize()))
 }
 
 #[cfg(feature = "cli")]

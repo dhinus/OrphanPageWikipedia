@@ -472,7 +472,7 @@ fn canonical_numbers_strings_and_order_match_the_frozen_python_identity() {
     assert_eq!(String::from_utf8(encoded).unwrap(), expected);
     assert_eq!(
         canonical_json_sha256(&value).unwrap(),
-        format!("{:x}", Sha256::digest(expected))
+        orphanwiki::dumps::hex_digest(Sha256::digest(expected))
     );
 }
 

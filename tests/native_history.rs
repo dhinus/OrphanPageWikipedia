@@ -47,7 +47,7 @@ impl Workspace {
         let bytes = encoder.finish().unwrap();
         let path = self.0.join(name);
         fs::write(&path, &bytes).unwrap();
-        json!({"path":path,"bytes":bytes.len(),"sha256_local":format!("{:x}",sha2::Sha256::digest(&bytes))})
+        json!({"path":path,"bytes":bytes.len(),"sha256_local":orphanwiki::dumps::hex_digest(sha2::Sha256::digest(&bytes))})
     }
     fn manifest(&self, files: Value) -> PathBuf {
         let path = self.0.join("manifest.json");
@@ -240,7 +240,7 @@ fn reconstruction_attribution_current_flags_and_strict_activity_boundaries() {
         result["metadata"]["creation_rule"],
         "mediawiki_history_page_creation_v2"
     );
-    let user_hash = format!("{:x}", sha2::Sha256::digest(b"[42, 43, 44]"));
+    let user_hash = orphanwiki::dumps::hex_digest(sha2::Sha256::digest(b"[42, 43, 44]"));
     assert!(workspace
         .table("history_imported")
         .iter()

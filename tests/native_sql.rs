@@ -38,7 +38,7 @@ impl Workspace {
         encoder.write_all(sql.as_bytes()).unwrap();
         let bytes = encoder.finish().unwrap();
         fs::write(&path, &bytes).unwrap();
-        json!({"path":path,"bytes":bytes.len(),"sha256_local":format!("{:x}",sha2::Sha256::digest(&bytes)),"job_updated":"2026-10-02 01:02:03.000001234"})
+        json!({"path":path,"bytes":bytes.len(),"sha256_local":orphanwiki::dumps::hex_digest(sha2::Sha256::digest(&bytes)),"job_updated":"2026-10-02 01:02:03.000001234"})
     }
     fn manifest(&self, modern_categories: bool) -> PathBuf {
         let mut files = serde_json::Map::new();
@@ -232,7 +232,7 @@ fn graph_bytes_retain_the_frozen_export_identity_for_unicode_links_and_metadata(
     let output = w.0.join("raw.json");
     import_graph(&manifest, &output, &w.0.join("staging")).unwrap();
     let path = serde_json::to_string(&manifest.canonicalize().unwrap()).unwrap();
-    let digest = format!("{:x}", sha2::Sha256::digest(fs::read(&manifest).unwrap()));
+    let digest = orphanwiki::dumps::hex_digest(sha2::Sha256::digest(fs::read(&manifest).unwrap()));
     let actual = fs::read_to_string(output)
         .unwrap()
         .replacen(&path, "\"MANIFEST\"", 1)
@@ -240,7 +240,7 @@ fn graph_bytes_retain_the_frozen_export_identity_for_unicode_links_and_metadata(
     // Frozen ea8b55a output, replacing only the temporary manifest path/hash.
     assert_eq!(actual.len(), 1401);
     assert_eq!(
-        format!("{:x}", sha2::Sha256::digest(actual.as_bytes())),
+        orphanwiki::dumps::hex_digest(sha2::Sha256::digest(actual.as_bytes())),
         "6ba287d8c21bc46415903c84ae6a8296b5d94542b7d6fa4e57a4da14b35f8a06"
     );
 }
@@ -273,7 +273,7 @@ fn standalone_combined_import_and_selected_history_reuse_existing_sql_stage() {
     let bytes = encoder.finish().unwrap();
     let history_path = workspace.0.join("all.tsv.bz2");
     fs::write(&history_path, &bytes).unwrap();
-    manifest["files"]["all.tsv.bz2"] = json!({"path":"all.tsv.bz2","bytes":bytes.len(),"sha256_local":format!("{:x}",sha2::Sha256::digest(&bytes))});
+    manifest["files"]["all.tsv.bz2"] = json!({"path":"all.tsv.bz2","bytes":bytes.len(),"sha256_local":orphanwiki::dumps::hex_digest(sha2::Sha256::digest(&bytes))});
     fs::write(&manifest_path, manifest.to_string()).unwrap();
     let run = |args: &[&str]| {
         std::process::Command::new(env!("CARGO_BIN_EXE_orphanwiki"))
@@ -546,7 +546,7 @@ fn truncated_gzip_and_empty_censuses_leave_the_previous_export_usable() {
             fs::write(&archive, &bytes).unwrap();
             manifest["files"]["page"]["bytes"] = json!(bytes.len());
             manifest["files"]["page"]["sha256_local"] =
-                json!(format!("{:x}", sha2::Sha256::digest(&bytes)));
+                json!(orphanwiki::dumps::hex_digest(sha2::Sha256::digest(&bytes)));
         }
         fs::write(&path, manifest.to_string()).unwrap();
         let output = workspace.0.join("raw.json");

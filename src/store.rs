@@ -104,7 +104,7 @@ fn fingerprint(db: &Connection) -> DumpResult<String> {
             }
         }
     }
-    Ok(format!("{:x}", hash.finalize()))
+    Ok(crate::dumps::hex_digest(hash.finalize()))
 }
 
 fn hidden_category(category: &str) -> DumpResult<(bool, bool)> {

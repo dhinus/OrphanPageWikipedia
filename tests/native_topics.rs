@@ -85,7 +85,7 @@ impl Workspace {
             }
         }
         fs::write(self.0.join("model.bin"), &bytes).unwrap();
-        spec["model_sha512"] = json!(format!("{:x}", Sha512::digest(bytes)));
+        spec["model_sha512"] = json!(orphanwiki::dumps::hex_digest(Sha512::digest(bytes)));
         fs::write(self.0.join("config/topics.json"), spec.to_string()).unwrap();
         spec
     }
@@ -98,7 +98,7 @@ impl Workspace {
             json!({"language":"vec","database":"vecwiki","sql_release":"20261001","files":files});
         fs::write(self.0.join("manifest.json"), manifest.to_string()).unwrap();
         let metadata = json!({"language":"vec","database":"vecwiki","source":"Wikimedia SQL dumps / vecwiki","complete":true,"demo":false,"sql_release":"20261001","finished_at":"2026-10-02T00:00:00+00:00",
-            "item_mapping":{"source":"page_props.wikibase_item","complete":true},"dump_manifest":self.0.join("manifest.json"),"dump_manifest_sha256":format!("{:x}",Sha256::digest(manifest.to_string()))});
+            "item_mapping":{"source":"page_props.wikibase_item","complete":true},"dump_manifest":self.0.join("manifest.json"),"dump_manifest_sha256":orphanwiki::dumps::hex_digest(Sha256::digest(manifest.to_string()))});
         let source = Connection::open(self.0.join("vecwiki-20261001.sqlite")).unwrap();
         source.execute_batch("CREATE TABLE imported(table_name TEXT PRIMARY KEY,sha256 TEXT);CREATE TABLE dump_page(id INTEGER,ns INTEGER,redirect INTEGER,title TEXT);CREATE TABLE dump_redirect(page_id INTEGER,ns INTEGER,title TEXT,interwiki TEXT);CREATE TABLE dump_category(source_id INTEGER,target_id INTEGER,title TEXT);CREATE TABLE dump_target(id INTEGER,ns INTEGER,title TEXT);CREATE TABLE dump_prop(page_id INTEGER,name TEXT);CREATE TABLE pages(id INTEGER PRIMARY KEY,data TEXT);CREATE TABLE links(id INTEGER,target TEXT);CREATE INDEX links_page ON links(id);CREATE TABLE categories(id INTEGER,target TEXT);CREATE INDEX categories_page ON categories(id);").unwrap();
         for table in SQL_TABLES {
@@ -352,7 +352,9 @@ fn bad_model_checksum_configuration_taxonomy_and_format_fail_before_prediction()
     assert!(NativeTopicModel::load(&work.0.join("model.bin"), &bad).is_err());
     fs::write(work.0.join("model.bin"), b"invalid model").unwrap();
     bad = spec;
-    bad["model_sha512"] = json!(format!("{:x}", Sha512::digest(b"invalid model")));
+    bad["model_sha512"] = json!(orphanwiki::dumps::hex_digest(Sha512::digest(
+        b"invalid model"
+    )));
     assert!(NativeTopicModel::load(&work.0.join("model.bin"), &bad).is_err());
 }
 
@@ -522,8 +524,9 @@ fn altered_staging_unapproved_graphs_and_overlapping_outputs_are_rejected() {
                     .execute("DELETE FROM imported WHERE table_name='page'", [])
                     .unwrap();
                 let mut raw = read(&work.0.join("vec-raw.json"));
-                raw["metadata"]["dump_manifest_sha256"] =
-                    json!(format!("{:x}", Sha256::digest(manifest.to_string())));
+                raw["metadata"]["dump_manifest_sha256"] = json!(orphanwiki::dumps::hex_digest(
+                    Sha256::digest(manifest.to_string())
+                ));
                 fs::write(
                     work.0.join("vec-raw.json"),
                     format!("{{\"metadata\":{}}}", raw["metadata"]),

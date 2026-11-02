@@ -27,7 +27,8 @@ mod canonical;
 pub(crate) use canonical::python_float;
 #[cfg(feature = "cli")]
 pub use canonical::{
-    canonical_json_sha256, export_csv, first_metadata, write_canonical_json, CSV_COLUMNS,
+    canonical_json_sha256, export_csv, first_metadata, hex_digest, write_canonical_json,
+    CSV_COLUMNS,
 };
 #[cfg(feature = "cli")]
 pub(crate) use canonical::{

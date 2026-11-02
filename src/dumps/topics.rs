@@ -229,7 +229,7 @@ impl NativeTopicModel {
                 }
                 digest.update(&block[..size]);
             }
-            if spec["model_sha512"] != format!("{:x}", digest.finalize()) {
+            if spec["model_sha512"] != crate::dumps::hex_digest(digest.finalize()) {
                 return Err("Checksum dei pesi del modello non corrispondente".into());
             }
             let mut worker = TopicWorker::start(path)?;
@@ -616,7 +616,7 @@ pub fn predict_imported_topics(
         }
         topic_deadline(deadline)?;
         let topic_metadata = json!({"language":language,"source":"local_model_on_verified_SQL_dump_outlinks","demo":false,"complete":true,
-        "started_at":started,"finished_at":topic_time(),"input_sha256":format!("{:x}",digest.finalize()),"input_file_sha256":raw_checksum,
+        "started_at":started,"finished_at":topic_time(),"input_sha256":crate::dumps::hex_digest(digest.finalize()),"input_file_sha256":raw_checksum,
         "graph_finished_at":metadata["finished_at"],"model":spec,"top_level_rule":"any_child_probability_gt_0.5",
         "scope":"model topic labels, not biographical gender observations","timing":{"native_graph_seconds":graph_seconds,"prediction_seconds":begin.elapsed().as_secs_f64()-graph_seconds},"predicted_pages":predicted,"missing_pages":expected-predicted});
         spool.publish(output, &topic_metadata)?;
@@ -740,7 +740,7 @@ pub fn predict_topics(
         topic_deadline(deadline)?;
         Ok(
             json!({"metadata":{"language":language,"source":"local_model_on_synthetic_outlinks","demo":true,"complete":true,
-        "started_at":started,"finished_at":topic_time(),"input_sha256":format!("{:x}",sha2::Sha256::digest(python_json(raw)?.as_bytes())),
+        "started_at":started,"finished_at":topic_time(),"input_sha256":crate::dumps::hex_digest(sha2::Sha256::digest(python_json(raw)?.as_bytes())),
         "graph_finished_at":metadata["finished_at"],"model":spec,"top_level_rule":"any_child_probability_gt_0.5",
         "scope":"model topic labels, not biographical gender observations","timing":{"native_graph_seconds":graph_seconds,"mapping_seconds":mapping_seconds,"prediction_seconds":prediction_start.elapsed().as_secs_f64()},
         "predicted_pages":predicted,"missing_pages":pages.len()-predicted},"pages":records}),

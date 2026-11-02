@@ -257,7 +257,7 @@ pub fn stage_supplement(
             }
         }
         if kind != SupplementKind::Topics {
-            meta["input_sha256"] = json!(format!("{:x}", digest.0.finalize()));
+            meta["input_sha256"] = json!(crate::dumps::hex_digest(digest.0.finalize()));
         }
         transaction.commit()?;
         Ok(meta)

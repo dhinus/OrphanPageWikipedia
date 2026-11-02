@@ -72,7 +72,7 @@ pub fn unique_id() -> String {
             .as_nanos(),
         NEXT_ID.fetch_add(1, Ordering::Relaxed)
     );
-    format!("{:x}", sha2::Sha256::digest(value.as_bytes()))[..32].into()
+    crate::dumps::hex_digest(sha2::Sha256::digest(value.as_bytes()))[..32].into()
 }
 
 pub fn monotonic_ns() -> u64 {

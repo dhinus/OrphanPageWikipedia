@@ -273,7 +273,7 @@ pub fn comparison_filename(
         write_sorted_json(&identity, &mut writer, false)?;
         writer.flush()?;
     }
-    let digest = format!("{:x}", digest.0.finalize());
+    let digest = crate::dumps::hex_digest(digest.0.finalize());
     Ok(format!("{language}-{release}-{}.json", &digest[..12]))
 }
 

@@ -337,7 +337,7 @@ pub(super) fn scan_history(
                     .collect::<Vec<_>>()
                     .join(", ")
             );
-            format!("{:x}", sha2::Sha256::digest(json.as_bytes()))
+            crate::dumps::hex_digest(sha2::Sha256::digest(json.as_bytes()))
         } else {
             HISTORY_RULE.to_owned()
         };

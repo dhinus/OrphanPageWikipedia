@@ -104,7 +104,7 @@ mod content {
             let sql_manifest = path.join("sql.json");
             fs::write(&sql_manifest, json!({"files":files}).to_string()).unwrap();
             let metadata = json!({"language":"vec","database":"vecwiki","source":"Wikimedia SQL dumps / vecwiki","complete":true,"sql_release":"20261001",
-                "dump_manifest":sql_manifest,"dump_manifest_sha256":format!("{:x}",sha2::Sha256::digest(fs::read(&sql_manifest).unwrap())),"finished_at":"2026-10-02T01:02:03+00:00"});
+                "dump_manifest":sql_manifest,"dump_manifest_sha256":orphanwiki::dumps::hex_digest(sha2::Sha256::digest(fs::read(&sql_manifest).unwrap())),"finished_at":"2026-10-02T01:02:03+00:00"});
             let raw = format!(
                 "{{\"metadata\":{},\"pages\":{}}}",
                 metadata,
@@ -135,7 +135,7 @@ mod content {
             let bytes = encoder.finish().unwrap();
             let path = self.0.join(name);
             fs::write(&path, &bytes).unwrap();
-            let digest = format!("{:x}", sha2::Sha256::digest(&bytes));
+            let digest = orphanwiki::dumps::hex_digest(sha2::Sha256::digest(&bytes));
             json!({"path":path,"bytes":bytes.len(),"sha256_local":digest,"sha256_publisher":digest})
         }
         fn manifest(&self, files: Value) {

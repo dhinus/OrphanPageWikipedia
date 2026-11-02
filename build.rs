@@ -15,9 +15,11 @@ fn build_fasttext() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=src/dumps.cc");
     let bytes = fs::read(&archive)
         .map_err(|e| format!("Eseguire prima sh scripts/prepare-fasttext.sh: {e}"))?;
-    if format!("{:x}", sha2::Sha256::digest(&bytes))
-        != "eb03f2ef6340c6ac9e4398a30026f05471da99381b307aafe2f56e4cd26baaef"
-    {
+    let checksum = sha2::Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    if checksum != "eb03f2ef6340c6ac9e4398a30026f05471da99381b307aafe2f56e4cd26baaef" {
         return Err(
             "Sorgente fastText 0.9.3 alterato; eseguire sh scripts/prepare-fasttext.sh".into(),
         );

@@ -167,7 +167,7 @@ impl Drop for Workspace {
     }
 }
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    orphanwiki::dumps::hex_digest(Sha256::digest(bytes))
 }
 
 #[test]

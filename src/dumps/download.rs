@@ -131,7 +131,7 @@ impl<T: DumpHttp> DumpClient<T> {
 
     fn digest(bytes: &[u8]) -> String {
         use sha2::Digest;
-        format!("{:x}", sha2::Sha256::digest(bytes))
+        crate::dumps::hex_digest(sha2::Sha256::digest(bytes))
     }
 
     /// Hash a file once while checking every available publisher checksum.
@@ -161,11 +161,11 @@ impl<T: DumpHttp> DumpClient<T> {
                     one.update(&buffer[..count]);
                 }
             }
-            let checksum = format!("{:x}", two.finalize());
+            let checksum = crate::dumps::hex_digest(two.finalize());
             crate::runtime::phase_counts(None, Some(scanned));
             if one
                 .zip(sha1)
-                .is_some_and(|(one, expected)| format!("{:x}", one.finalize()) != expected)
+                .is_some_and(|(one, expected)| crate::dumps::hex_digest(one.finalize()) != expected)
                 || sha256.is_some_and(|expected| checksum != expected)
             {
                 return Ok(None);

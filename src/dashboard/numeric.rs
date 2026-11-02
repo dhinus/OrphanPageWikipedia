@@ -29,14 +29,14 @@ pub(super) struct NumericReport {
     pub(super) month_histogram: Option<MonthHistogram>,
 }
 #[derive(Serialize)]
-pub(crate) struct MonthHistogram {
+pub(super) struct MonthHistogram {
     pub(super) rule: &'static str,
     pub(super) through: usize,
     pub(super) count_max: usize,
     pub(super) groups: [MonthGroup; 2],
 }
 impl MonthHistogram {
-    pub(crate) fn from_counts(counts: [Vec<usize>; 2], totals: [usize; 2]) -> Self {
+    fn from_counts(counts: [Vec<usize>; 2], totals: [usize; 2]) -> Self {
         let count_max = counts
             .iter()
             .flatten()

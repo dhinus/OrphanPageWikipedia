@@ -104,7 +104,7 @@ function distribution(id: string, field: MetricField, unit: string, axisLabel: s
   const plotWidth=width-left-right, plotHeight=bottom-top;
   const months=histogram&&field==='creator_continuity_months_before_creation'?report.month_histogram:undefined;
   if(histogram&&field==='creator_continuity_months_before_creation'&&!months) {
-    box.append(element('p',t('Grafico della continuità non disponibile: aggiornare e riavviare il servizio dashboard.')));
+    box.append(element('p',t('Grafico della continuità non disponibile in questa raccolta.')));
     return report;
   }
   const binCount=months?months.through+2:20,bins=(months?.groups??groups).map(group=>group.counts),groupedTails=Array.isArray(report.cumulative_ticks);

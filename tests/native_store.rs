@@ -245,7 +245,7 @@ fn private_collection_staging_omits_file_transports_and_preserves_every_relation
 }
 
 #[test]
-fn older_collections_gain_the_discrete_continuity_view_without_rewriting_the_database() {
+fn summaries_are_served_as_published_without_filling_missing_continuity() {
     let w = Fixture::new("20261001");
     let mut expected = Vec::new();
     for entry in w.entries.as_array().unwrap() {
@@ -253,34 +253,24 @@ fn older_collections_gain_the_discrete_continuity_view_without_rewriting_the_dat
         let mut summary: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         let report =
             &mut summary["reports"]["numeric"]["creator_continuity_months_before_creation"];
-        let months = report
+        // Pipeline preparation produces the histogram for both members and
+        // All languages. Older publications may legitimately lack it.
+        assert!(report["month_histogram"].is_object());
+        report
             .as_object_mut()
             .unwrap()
             .remove("month_histogram")
             .unwrap();
-        expected.push((
-            entry["summary_file"].as_str().unwrap().to_owned(),
-            months,
-            report.clone(),
-        ));
         write(&path, &summary);
+        expected.push((entry["summary_file"].as_str().unwrap().to_owned(), summary));
     }
     w.publish();
     let before = fs::read(w.db()).unwrap();
     let census = Census::open(&w.db()).unwrap();
-    for (path, expected_months, original_report) in expected {
-        let mut summary = census.resource(&path).unwrap();
-        let report =
-            &mut summary["reports"]["numeric"]["creator_continuity_months_before_creation"];
-        assert_eq!(
-            report
-                .as_object_mut()
-                .unwrap()
-                .remove("month_histogram")
-                .unwrap(),
-            expected_months
-        );
-        assert_eq!(*report, original_report);
+    for _ in 0..2 {
+        for (path, summary) in &expected {
+            assert_eq!(census.resource(path).unwrap(), *summary);
+        }
     }
     census.verify().unwrap();
     assert_eq!(fs::read(w.db()).unwrap(), before);
@@ -311,14 +301,16 @@ fn pagination_uses_summary_identity_without_rebuilding_unrelated_charts() {
     for (request, result) in &expected {
         assert_eq!(db.query(request, &[]).unwrap(), *result);
     }
-    // A chart that cannot be reconstructed must not break independent lists.
-    // Resource requests still validate its coverage, as they did previously.
-    writer.execute("UPDATE documents SET data=json_set(data,'$.reports.numeric.creator_continuity_months_before_creation.groups[0].known',-1) WHERE json_extract(data,'$.format')='dashboard_summary_v1'", []).unwrap();
     let before = fs::read(w.db()).unwrap();
     for entry in w.entries.as_array().unwrap() {
-        assert!(db
+        let summary = db
             .resource(entry["summary_file"].as_str().unwrap())
-            .is_err());
+            .unwrap();
+        assert!(
+            summary["reports"]["numeric"]["creator_continuity_months_before_creation"]
+                .get("month_histogram")
+                .is_none()
+        );
     }
     for (request, result) in &expected {
         assert_eq!(db.query(request, &[]).unwrap(), *result);
@@ -334,6 +326,84 @@ fn pagination_uses_summary_identity_without_rebuilding_unrelated_charts() {
     for kind in ["articles", "cards", "creators"] {
         assert!(db.query(&w.request(kind), &[]).is_err());
     }
+}
+
+#[test]
+fn global_title_indices_avoid_sorting_and_preserve_existing_collection_queries() {
+    let w = Fixture::new("20261001");
+    w.publish();
+    let db = Census::open(&w.db()).unwrap();
+    let connection =
+        rusqlite::Connection::open_with_flags(w.db(), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .unwrap();
+    let mut expected = Vec::new();
+    for (group, condition, index) in [
+        ("all", "", "page_global_titles"),
+        ("orphans", "WHERE p.orphan=1", "page_global_groups"),
+        ("non-orphans", "WHERE p.orphan=0", "page_global_groups"),
+    ] {
+        // Include the target join used by the explorer, and preserve its exact
+        // tie order when the same title/ID occurs in several editions.
+        let sql = format!("SELECT p.language,p.id,p.data,p.title,p.orphan FROM pages p LEFT JOIN targets t ON t.language=p.language AND t.id=p.id {condition} ORDER BY p.title_fold,p.title,p.id,p.language LIMIT 25 OFFSET ?");
+        let plan = connection
+            .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+            .unwrap()
+            .query_map([0], |row| row.get::<_, String>(3))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert!(plan.iter().any(|line| line.contains(index)), "{plan:?}");
+        assert!(
+            !plan.iter().any(|line| line.contains("TEMP B-TREE")),
+            "{plan:?}"
+        );
+        for offset in [0, 25, 50] {
+            let mut request = w.request("articles");
+            request.dataset = "all.json".into();
+            request.group = group.into();
+            request.order = "title-asc".into();
+            request.offset = offset;
+            let result = db.query(&request, &[]).unwrap();
+            let ids = result["pages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|page| {
+                    (
+                        page["language"].as_str().unwrap().to_owned(),
+                        page["page_id"].as_i64().unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let indexed = connection
+                .prepare(&sql)
+                .unwrap()
+                .query_map([offset], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            assert_eq!(ids, indexed);
+            expected.push((request, result));
+        }
+    }
+    drop(connection);
+    drop(db);
+    // Simulate an already published collection: serving must neither require
+    // nor install the new indices, and every result must stay identical.
+    let writer = rusqlite::Connection::open(w.db()).unwrap();
+    writer
+        .execute_batch("DROP INDEX page_global_titles; DROP INDEX page_global_groups;")
+        .unwrap();
+    drop(writer);
+    let before = fs::read(w.db()).unwrap();
+    let db = Census::open(&w.db()).unwrap();
+    for (request, result) in expected {
+        assert_eq!(db.query(&request, &[]).unwrap(), result);
+    }
+    db.verify().unwrap();
+    assert_eq!(fs::read(w.db()).unwrap(), before);
 }
 
 #[test]

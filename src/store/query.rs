@@ -7,8 +7,8 @@ impl Census {
         let aggregate = entry["kind"] == "aggregate";
         let language = entry["language"].as_str().ok_or("Lingua mancante")?;
         // Lists need only the approved summary's identity and census size.
-        // Loading the chart resource can reconstruct missing histograms over
-        // the full census in older collections, on every pagination request.
+        // Keep pagination independent of chart payloads; summaries are served
+        // exactly as published, including any unavailable reports.
         let summary = self.json(
             "SELECT json_object('metadata',json_extract(data,'$.metadata'),'census_page_count',json_extract(data,'$.census_page_count')) FROM documents WHERE path=?",
             [filename(&entry["summary_file"])?],

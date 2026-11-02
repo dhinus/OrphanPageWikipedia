@@ -66,6 +66,8 @@ pub fn publish(folder: &Path, destination: &Path, identity: &Value) -> DumpResul
             CREATE INDEX page_lengths ON pages(language,orphan,length,title_fold,id);
             CREATE INDEX page_dates ON pages(language,orphan,created,title_fold,id);
             CREATE INDEX page_categories ON pages(language,category_fold,id);
+            CREATE INDEX page_global_titles ON pages(title_fold,title,id,language);
+            CREATE INDEX page_global_groups ON pages(orphan,title_fold,title,id,language);
             CREATE INDEX topic_labels ON topics(label,language,page_id);
             CREATE INDEX target_counts ON targets(language,count,id);
             CREATE INDEX creator_orphans ON creators(dataset,orphans,key);

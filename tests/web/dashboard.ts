@@ -215,7 +215,8 @@ await test('continuity separates zero, one and two months and retains overflow i
   const olderCharts=createCharts({data:dataset,precomputed:older,topicDisplayNames:new Map(),creatorMode:()=> 'observed'});
   node('chart-type').value='percent';olderCharts.historyCharts();
   assert.equal(chart.children.length,1);
-  assert(chart.children[0].textContent.includes('aggiornare e riavviare il servizio dashboard'));
+  assert(chart.children[0].textContent.includes('non disponibile in questa raccolta'));
+  assert.deepEqual(older,invalid);
   olderCharts.creatorCharts();
   assert(node('creator_tenure_days-chart').children.some(child=>child.attributes.has('viewBox')));
   invalid.reports.numeric.creator_continuity_months_before_creation.month_histogram=structuredClone(report.month_histogram);

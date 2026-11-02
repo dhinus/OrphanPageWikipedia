@@ -287,6 +287,55 @@ fn older_collections_gain_the_discrete_continuity_view_without_rewriting_the_dat
 }
 
 #[test]
+fn pagination_uses_summary_identity_without_rebuilding_unrelated_charts() {
+    let w = Fixture::new("20261001");
+    w.publish();
+    let db = Census::open(&w.db()).unwrap();
+    let mut expected = Vec::new();
+    for dataset in [w.entries[0]["file"].as_str().unwrap(), "all.json"] {
+        for kind in ["articles", "cards", "creators"] {
+            for offset in [0, 25, 50] {
+                let mut request = w.request(kind);
+                request.dataset = dataset.into();
+                request.offset = offset;
+                let result = db.query(&request, &[]).unwrap();
+                expected.push((request, result));
+            }
+        }
+    }
+    drop(db);
+    let writer = rusqlite::Connection::open(w.db()).unwrap();
+    writer.execute("UPDATE documents SET data=json_remove(data,'$.reports.numeric.creator_continuity_months_before_creation.month_histogram') WHERE json_extract(data,'$.format')='dashboard_summary_v1'", []).unwrap();
+    let db = Census::open(&w.db()).unwrap();
+    for (request, result) in &expected {
+        assert_eq!(db.query(request, &[]).unwrap(), *result);
+    }
+    // A chart that cannot be reconstructed must not break independent lists.
+    // Resource requests still validate its coverage, as they did previously.
+    writer.execute("UPDATE documents SET data=json_set(data,'$.reports.numeric.creator_continuity_months_before_creation.groups[0].known',-1) WHERE json_extract(data,'$.format')='dashboard_summary_v1'", []).unwrap();
+    let before = fs::read(w.db()).unwrap();
+    for entry in w.entries.as_array().unwrap() {
+        assert!(db
+            .resource(entry["summary_file"].as_str().unwrap())
+            .is_err());
+    }
+    for (request, result) in &expected {
+        assert_eq!(db.query(request, &[]).unwrap(), *result);
+    }
+    assert_eq!(fs::read(w.db()).unwrap(), before);
+    // The approved summary remains required even though its charts are unused.
+    writer
+        .execute(
+            "DELETE FROM documents WHERE path=?",
+            [w.entries[0]["summary_file"].as_str().unwrap()],
+        )
+        .unwrap();
+    for kind in ["articles", "cards", "creators"] {
+        assert!(db.query(&w.request(kind), &[]).is_err());
+    }
+}
+
+#[test]
 fn relational_queries_preserve_full_census_missing_values_filters_and_every_edge() {
     let w = Fixture::new("20261001");
     w.publish();

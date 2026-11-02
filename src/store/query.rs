@@ -6,7 +6,13 @@ impl Census {
         let entry = self.entry(&request.dataset)?;
         let aggregate = entry["kind"] == "aggregate";
         let language = entry["language"].as_str().ok_or("Lingua mancante")?;
-        let summary = self.resource(filename(&entry["summary_file"])?)?;
+        // Lists need only the approved summary's identity and census size.
+        // Loading the chart resource can reconstruct missing histograms over
+        // the full census in older collections, on every pagination request.
+        let summary = self.json(
+            "SELECT json_object('metadata',json_extract(data,'$.metadata'),'census_page_count',json_extract(data,'$.census_page_count')) FROM documents WHERE path=?",
+            [filename(&entry["summary_file"])?],
+        )?;
         self.db.execute_batch("CREATE TEMP TABLE IF NOT EXISTS closed(language TEXT,target INTEGER,source INTEGER,PRIMARY KEY(language,target,source)) WITHOUT ROWID;
             CREATE TEMP TABLE IF NOT EXISTS weights(label TEXT PRIMARY KEY,weight REAL) WITHOUT ROWID;
             CREATE TEMP TABLE IF NOT EXISTS affinities(language TEXT PRIMARY KEY,weight REAL) WITHOUT ROWID;

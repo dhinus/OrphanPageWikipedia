@@ -360,6 +360,30 @@ test('editorial preparation, dialog cleanup and persistent shared review', async
   expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain('Testo sintetico');
 });
 
+test('additional LLM providers retain their selection and expose plain chat links',async({page,site,traffic})=>{
+  for(const [provider,name,url] of [
+    ['chatgpt','ChatGPT','https://chatgpt.com/'],
+    ['claude','Claude','https://claude.ai/'],
+    ['gemini','Gemini','https://gemini.google.com/'],
+  ]) {
+    await open(page,site,'deorphanize.html');
+    const calls=traffic.editorial.length;
+    await expect(page.locator(`#llm-provider option[value="${provider}"]`)).toHaveText(name);
+    await page.locator('#llm-provider').selectOption(provider);
+    expect(traffic.editorial).toHaveLength(calls);
+    await page.reload();
+    await expect(page.locator('#candidate-cards button.fix-link')).toHaveCount(25);
+    await expect(page.locator('#llm-provider')).toHaveValue(provider);
+    expect(traffic.editorial).toHaveLength(calls);
+    await page.locator('#candidate-cards button.fix-link').first().click();
+    await expect(page.locator('#llm-prompt-copy')).toBeEnabled();
+    await expect(page.locator('#llm-prompt-title')).toHaveText(`Prompt per ${name}`);
+    await expect(page.locator('#llm-prompt-open')).toHaveAttribute('href',url);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#llm-prompt-text')).toHaveValue('');
+  }
+});
+
 test('mobile layout, keyboard controls and Escape cleanup', async ({page, site}) => {
   await page.setViewportSize({width: 390, height: 844});
   for (const filename of ['index.html', 'creators.html', 'deorphanize.html', 'connections.html']) {

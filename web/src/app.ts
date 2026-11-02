@@ -17,6 +17,9 @@ const llmProviders: Record<string, Provider> = {
   kimi:{name:'Kimi',url:'https://www.kimi.ai/'},
   glm:{name:'GLM',url:'https://chat.z.ai/'},
   mistral:{name:'Mistral',url:'https://chat.mistral.ai/chat'},
+  chatgpt:{name:'ChatGPT',url:'https://chatgpt.com/'},
+  claude:{name:'Claude',url:'https://claude.ai/'},
+  gemini:{name:'Gemini',url:'https://gemini.google.com/'},
   other:{name:'Altro',url:null}
 };
 let llmProvider=readPreference('orphanwiki-llm','qwen',Object.keys(llmProviders));

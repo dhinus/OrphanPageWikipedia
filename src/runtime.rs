@@ -18,6 +18,95 @@ use std::{
 static SIGNAL: OnceLock<Arc<AtomicUsize>> = OnceLock::new();
 static NEXT_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Decimal GB: the pipeline and all descendants share this ceiling.
+pub const PIPELINE_MEMORY_MAX_BYTES: u64 = 8_000_000_000;
+
+fn cgroup_location(membership: &str, mounts: &str) -> Result<(PathBuf, PathBuf), String> {
+    let group = membership
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .ok_or("Il limite RAM richiede cgroup v2 su Linux")?;
+    let group = Path::new(group);
+    if !group.is_absolute()
+        || group
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+    {
+        return Err("Percorso cgroup non valido".into());
+    }
+    let unescape = |value: &str| {
+        value
+            .replace("\\040", " ")
+            .replace("\\011", "\t")
+            .replace("\\012", "\n")
+            .replace("\\134", "\\")
+    };
+    for line in mounts.lines() {
+        let Some((left, right)) = line.split_once(" - ") else {
+            continue;
+        };
+        if right.split_whitespace().next() != Some("cgroup2") {
+            continue;
+        }
+        let fields = left.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 5 {
+            continue;
+        }
+        let mounted_root = PathBuf::from(unescape(fields[3]));
+        let root = PathBuf::from(unescape(fields[4]));
+        if let Ok(relative) = group.strip_prefix(&mounted_root) {
+            return Ok((root.clone(), root.join(relative)));
+        }
+    }
+    Err("Gerarchia cgroup v2 non accessibile per verificare il limite RAM".into())
+}
+
+fn cgroup_ceiling(root: &Path, group: &Path) -> Result<Option<u64>, String> {
+    if !group.starts_with(root) {
+        return Err("Cgroup esterno alla gerarchia".into());
+    }
+    let mut maximum: Option<u64> = None;
+    for directory in group.ancestors().take_while(|path| path.starts_with(root)) {
+        match std::fs::read_to_string(directory.join("memory.max")) {
+            Ok(text) => {
+                let text = text.trim();
+                if text != "max" {
+                    let value = text
+                        .parse::<u64>()
+                        .map_err(|_| "Limite cgroup RAM non valido")?;
+                    maximum = Some(maximum.map_or(value, |before| before.min(value)));
+                }
+            }
+            Err(error) if directory == root && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(format!("Limite cgroup RAM non verificabile: {error}")),
+        }
+    }
+    Ok(maximum)
+}
+
+/// Read the kernel's effective ceiling, including stricter ancestor limits.
+/// Environment variables and sampled RSS cannot establish a hard memory cap.
+pub fn memory_ceiling() -> Result<(PathBuf, Option<u64>), String> {
+    #[cfg(target_os = "linux")]
+    {
+        let membership = std::fs::read_to_string("/proc/self/cgroup").map_err(|e| e.to_string())?;
+        let mounts = std::fs::read_to_string("/proc/self/mountinfo").map_err(|e| e.to_string())?;
+        let (root, group) = cgroup_location(&membership, &mounts)?;
+        let maximum = cgroup_ceiling(&root, &group)?;
+        Ok((group, maximum))
+    }
+    #[cfg(not(target_os = "linux"))]
+    Err("Il tetto RAM complessivo della pipeline richiede Linux con cgroup v2".into())
+}
+
+pub fn require_memory_ceiling(maximum: u64) -> Result<(), String> {
+    let (_, current) = memory_ceiling()?;
+    if current.is_some_and(|current| current <= maximum) {
+        return Ok(());
+    }
+    Err(format!("Pipeline non avviata: manca un limite cgroup complessivo di {maximum} byte o inferiore; configurare MemoryMax nel servizio o usare systemd-run"))
+}
+
 fn signal() -> &'static Arc<AtomicUsize> {
     SIGNAL.get_or_init(|| Arc::new(AtomicUsize::new(0)))
 }
@@ -474,6 +563,55 @@ pub fn child_usage() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_cgroup_mounts_preserve_namespaces_escaped_paths_and_scope_membership() {
+        let mounts = "24 12 0:31 / /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n";
+        assert_eq!(
+            cgroup_location("0::/parent/job.scope\n", mounts).unwrap(),
+            (
+                PathBuf::from("/sys/fs/cgroup"),
+                PathBuf::from("/sys/fs/cgroup/parent/job.scope")
+            )
+        );
+        let mounts = "24 12 0:31 /parent /sys/fs/control\\040groups rw - cgroup2 cgroup2 rw\n";
+        assert_eq!(
+            cgroup_location("0::/parent/job.scope\n", mounts).unwrap(),
+            (
+                PathBuf::from("/sys/fs/control groups"),
+                PathBuf::from("/sys/fs/control groups/job.scope")
+            )
+        );
+        assert!(cgroup_location("0::/../escape", mounts).is_err());
+        assert!(cgroup_location("2:memory:/legacy", mounts).is_err());
+        assert!(cgroup_location("0::/unmapped/job.scope", mounts).is_err());
+    }
+
+    #[test]
+    fn effective_memory_ceiling_uses_the_strictest_ancestor_and_rejects_unknown_limits() {
+        struct Group(PathBuf);
+        impl Drop for Group {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Group(std::env::temp_dir().join(format!("orphanwiki-cgroup-{}", unique_id())));
+        let parent = root.0.join("parent");
+        let child = parent.join("job.scope");
+        std::fs::create_dir_all(&child).unwrap();
+        std::fs::write(parent.join("memory.max"), "128000000\n").unwrap();
+        std::fs::write(child.join("memory.max"), "256000000\n").unwrap();
+        assert_eq!(cgroup_ceiling(&root.0, &child).unwrap(), Some(128000000));
+        std::fs::write(parent.join("memory.max"), "max\n").unwrap();
+        assert_eq!(cgroup_ceiling(&root.0, &child).unwrap(), Some(256000000));
+        std::fs::write(child.join("memory.max"), "max\n").unwrap();
+        assert_eq!(cgroup_ceiling(&root.0, &child).unwrap(), None);
+        std::fs::write(child.join("memory.max"), "unknown\n").unwrap();
+        assert!(cgroup_ceiling(&root.0, &child).is_err());
+        std::fs::remove_file(child.join("memory.max")).unwrap();
+        assert!(cgroup_ceiling(&root.0, &child).is_err());
+        assert!(cgroup_ceiling(&child, &root.0).is_err());
+    }
 
     struct Log(PathBuf);
     impl Log {

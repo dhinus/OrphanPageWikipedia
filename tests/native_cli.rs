@@ -394,6 +394,44 @@ fn bad_arguments_never_publish_output() {
     assert_eq!(fs::read_dir(&workspace.0).unwrap().count(), 0);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn memory_scope_marker_cannot_bypass_kernel_verification_or_start_collection_writes() {
+    if orphanwiki::runtime::memory_ceiling()
+        .ok()
+        .and_then(|(_, n)| n)
+        .is_some_and(|n| n <= 67_108_864)
+    {
+        return;
+    }
+    let workspace = Workspace::new();
+    fs::create_dir(workspace.0.join("config")).unwrap();
+    fs::write(
+        workspace.0.join("config/languages.json"),
+        r#"{"version":1,"languages":["vec"]}"#,
+    )
+    .unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_orphanwiki"))
+        .args([
+            "pipeline",
+            "--sql-release",
+            "20261001",
+            "--history-release",
+            "2026-09",
+            "--memory-limit-bytes",
+            "67108864",
+        ])
+        .env_clear()
+        .env("ORPHANWIKI_MEMORY_SCOPE", "1")
+        .current_dir(&workspace.0)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(!workspace.0.join("data").exists());
+    assert!(!workspace.0.join("web").exists());
+    assert!(!result.stderr.is_empty());
+}
+
 #[test]
 fn dashboard_requires_a_database_even_when_standalone_exports_exist() {
     let workspace = Workspace::new();

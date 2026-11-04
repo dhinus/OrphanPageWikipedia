@@ -2,6 +2,42 @@ use super::*;
 use serde_json::json;
 
 #[test]
+fn pipeline_memory_ceiling_defaults_to_eight_decimal_gb_and_can_only_be_lowered() {
+    let pipeline = |value: Option<&str>| {
+        let mut args = vec![
+            "orphanwiki",
+            "pipeline",
+            "--sql-release",
+            "20261001",
+            "--history-release",
+            "2026-09",
+            "--plan",
+        ];
+        if let Some(value) = value {
+            args.extend(["--memory-limit-bytes", value]);
+        }
+        command().try_get_matches_from(args)
+    };
+    let mut matches = pipeline(None).unwrap();
+    let (_, args) = matches.remove_subcommand().unwrap();
+    assert_eq!(
+        *args.get_one::<u64>("memory-limit-bytes").unwrap(),
+        8_000_000_000
+    );
+    let invocation = Invocation {
+        name: "pipeline".into(),
+        args,
+        root: PathBuf::from("."),
+        editions: vec![],
+    };
+    // A plan does not need systemd or a cgroup and must not reexec.
+    invocation.limit_pipeline_memory(Path::new(".")).unwrap();
+    assert!(pipeline(Some("128000000")).is_ok());
+    assert_eq!(pipeline(Some("0")).unwrap_err().exit_code(), 2);
+    assert_eq!(pipeline(Some("8000000001")).unwrap_err().exit_code(), 2);
+}
+
+#[test]
 fn commands_accept_the_existing_pipeline_arguments() {
     for arguments in [
         vec![

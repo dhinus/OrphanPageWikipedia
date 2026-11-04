@@ -1,5 +1,18 @@
 use super::*;
 
+fn memory_group_usage() -> Value {
+    let Ok((path, maximum)) = runtime::memory_ceiling() else {
+        return Value::Null;
+    };
+    let counter = |name: &str| {
+        std::fs::read_to_string(path.join(name))
+            .ok()
+            .and_then(|n| n.trim().parse::<u64>().ok())
+    };
+    json!({"path":path,"effective_max_bytes":maximum,"current_bytes":counter("memory.current"),
+        "peak_bytes":counter("memory.peak"),"swap_bytes":counter("memory.swap.current")})
+}
+
 pub(super) fn timestamp() -> String {
     let now: chrono::DateTime<chrono::Utc> = SystemTime::now().into();
     now.to_rfc3339_opts(chrono::SecondsFormat::Micros, false)
@@ -31,7 +44,8 @@ pub(super) fn host_inventory(disks: &BTreeMap<&str, PathBuf>) -> Value {
     json!({"platform":std::env::consts::OS,"architecture":std::env::consts::ARCH,"cpu_count":std::thread::available_parallelism().ok().map(|n|n.get()),
         "cpu_affinity":affinity,"disks":disks.iter().map(|(key,path)|(*key,disk_usage(path))).collect::<BTreeMap<_,_>>(),
         "cpuinfo":std::fs::read_to_string("/proc/cpuinfo").ok(),"memory":std::fs::read_to_string("/proc/meminfo").ok(),
-        "cgroup_cpu_max":std::fs::read_to_string("/sys/fs/cgroup/cpu.max").ok(),"cgroup_memory_max":std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok()})
+        "cgroup_cpu_max":std::fs::read_to_string("/sys/fs/cgroup/cpu.max").ok(),"cgroup_memory_max":std::fs::read_to_string("/sys/fs/cgroup/memory.max").ok(),
+        "pipeline_memory_cgroup":runtime::memory_ceiling().ok().map(|(path,maximum)|json!({"path":path,"effective_max_bytes":maximum}))})
 }
 
 pub(super) struct Reporting {
@@ -89,6 +103,7 @@ impl Reporter {
             .active
             .clone();
         let mut resources = runtime::resources(std::process::id(), self.include_controller_memory);
+        resources["memory_cgroup"] = memory_group_usage();
         let now = Instant::now();
         let step = {
             let mut state = self.shared.lock().map_err(|_| "Metriche non disponibili")?;
@@ -326,7 +341,7 @@ impl Runner {
                 "repo_root":options.root,"sql_release":options.sql_release,"history_release":options.history_release,"content_release":options.content_release,
                 "dump_root":options.dump_root,"import_dir":options.import_dir,"output_dir":options.output_dir,"work_dir":options.work_dir,
                 "topic_batch_size":options.topic_batch_size,"topic_budget_seconds":options.topic_budget_seconds,"history_cache_mib":options.history_cache_mib,
-                "history_commit_rows":options.history_commit_rows,"metrics_interval":options.metrics_interval,"no_phase_spans":options.no_phase_spans,"force":options.force},
+                "history_commit_rows":options.history_commit_rows,"memory_limit_bytes":options.memory_limit_bytes,"metrics_interval":options.metrics_interval,"no_phase_spans":options.no_phase_spans,"force":options.force},
             "host":host_inventory(&disks),
             "code":{"git_revision":git(&["rev-parse","HEAD"]),"binary_sha256":dumps::file_sha256(&executable)?},"config_sha256":configs,
             "measurement":{"interval_seconds":options.metrics_interval,"spans_file":(!options.no_phase_spans).then(||prefix.with_extension("benchmark.spans.jsonl").file_name().map(|s|s.to_string_lossy().into_owned())).flatten(),
@@ -402,7 +417,9 @@ impl Runner {
             return Ok(());
         };
         reporter.sample()?;
-        let resources = runtime::resources(std::process::id(), reporter.include_controller_memory);
+        let mut resources =
+            runtime::resources(std::process::id(), reporter.include_controller_memory);
+        resources["memory_cgroup"] = memory_group_usage();
         let status = if result.is_ok() {
             "completed"
         } else if runtime::received_signal().is_some() {

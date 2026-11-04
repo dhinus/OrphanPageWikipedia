@@ -153,6 +153,12 @@ pub(crate) fn command() -> Command {
     .arg(path_option("import-dir", "data/imported"))
     .arg(path_option("output-dir", "web/data"))
     .arg(option("collection-database"))
+    .arg(
+        option("memory-limit-bytes")
+            .help("Tetto RAM aggregato, massimo 8 GB decimali; richiede Linux/cgroup v2 (systemd-run o servizio già limitato)")
+            .default_value("8000000000")
+            .value_parser(clap::value_parser!(u64).range(67_108_864..=orphanwiki::runtime::PIPELINE_MEMORY_MAX_BYTES)),
+    )
     .arg(option("work-dir"))
     .arg(path_option("log-dir", "data/logs"))
     .arg(path_option(

@@ -45,6 +45,7 @@ pub struct PipelineOptions {
     pub topic_batch_size: u32,
     pub history_cache_mib: u32,
     pub history_commit_rows: u32,
+    pub memory_limit_bytes: u64,
     pub metrics_interval: f64,
     pub no_phase_spans: bool,
     pub force: bool,
@@ -86,6 +87,7 @@ pub fn run(mut options: PipelineOptions) -> PipelineResult<()> {
         || !(1..=10000).contains(&options.topic_batch_size)
         || !(1..=65536).contains(&options.history_cache_mib)
         || !(1..=10000000).contains(&options.history_commit_rows)
+        || !(67_108_864..=runtime::PIPELINE_MEMORY_MAX_BYTES).contains(&options.memory_limit_bytes)
     {
         return Err("Controlli operativi non validi".into());
     }
@@ -100,6 +102,9 @@ pub fn run(mut options: PipelineOptions) -> PipelineResult<()> {
         return Err("Selezionare solo edizioni configurate senza duplicati".into());
     }
     let execute = || {
+        if !options.plan {
+            runtime::require_memory_ceiling(options.memory_limit_bytes)?;
+        }
         let mut runner = Runner::new(&options)?;
         let settings = runner.trace.clone();
         let result = runtime::with_tracing(settings, || {

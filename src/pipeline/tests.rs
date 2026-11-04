@@ -48,6 +48,7 @@ impl Fixture {
             topic_batch_size: 256,
             history_cache_mib: 256,
             history_commit_rows: 250000,
+            memory_limit_bytes: runtime::PIPELINE_MEMORY_MAX_BYTES,
             metrics_interval: 0.1,
             no_phase_spans: false,
             force: false,

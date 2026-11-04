@@ -44,6 +44,10 @@ fn main() -> ExitCode {
         eprintln!("{error}");
         return ExitCode::from(2);
     }
+    if let Err(error) = invocation.limit_pipeline_memory(&current) {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
     let _signals = if invocation.name == "serve" {
         None
     } else {

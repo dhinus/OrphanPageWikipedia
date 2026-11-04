@@ -171,6 +171,52 @@ impl Drop for Workspace {
 }
 
 #[test]
+fn private_sql_archives_are_consumed_per_table_and_partial_imports_resume() {
+    let w = Workspace::new();
+    let original = w.manifest(true);
+    let mut manifest: Value = serde_json::from_slice(&fs::read(original).unwrap()).unwrap();
+    let identity = json!({"rule":"relational_census_v1","test":"sql consumption"});
+    let hash = orphanwiki::dumps::canonical_json_sha256(&identity).unwrap();
+    let root = w.0.join(format!(".collection-{}-downloads", &hash[..16]));
+    let folder = root.join("vecwiki");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(root.join(".owner.json"), identity.to_string()).unwrap();
+    for record in manifest["files"].as_object_mut().unwrap().values_mut() {
+        let old = PathBuf::from(record["path"].as_str().unwrap());
+        let new = folder.join(old.file_name().unwrap());
+        fs::rename(old, &new).unwrap();
+        record["path"] = json!(new);
+    }
+    let path = folder.join("manifest.json");
+    let broken = PathBuf::from(manifest["files"]["linktarget"]["path"].as_str().unwrap());
+    let bytes = fs::read(&broken).unwrap();
+    let record = manifest["files"]["linktarget"].clone();
+    fs::write(&broken, b"invalid gzip").unwrap();
+    manifest["files"]["linktarget"]["bytes"] = json!(12);
+    manifest["files"]["linktarget"]["sha256_local"] = json!(orphanwiki::dumps::hex_digest(
+        sha2::Sha256::digest(b"invalid gzip")
+    ));
+    fs::write(&path, manifest.to_string()).unwrap();
+    let output = w.0.join("raw.json");
+    assert!(import_graph(&path, &output, &w.0).is_err());
+    for name in ["page", "pagelinks"] {
+        assert!(!PathBuf::from(manifest["files"][name]["path"].as_str().unwrap()).exists());
+    }
+    assert!(broken.exists());
+    assert!(!output.exists());
+    fs::write(&broken, bytes).unwrap();
+    manifest["files"]["linktarget"] = record;
+    fs::write(&path, manifest.to_string()).unwrap();
+    assert_eq!(import_graph(&path, &output, &w.0).unwrap(), 1101);
+    let approved = fs::read(&output).unwrap();
+    assert_eq!(import_graph(&path, &output, &w.0).unwrap(), 1101);
+    assert_eq!(fs::read(&output).unwrap(), approved);
+    for record in manifest["files"].as_object().unwrap().values() {
+        assert!(!PathBuf::from(record["path"].as_str().unwrap()).exists());
+    }
+}
+
+#[test]
 fn graph_bytes_retain_the_frozen_export_identity_for_unicode_links_and_metadata() {
     let w = Workspace::new();
     let tables = [

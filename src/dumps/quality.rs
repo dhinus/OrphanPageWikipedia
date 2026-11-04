@@ -535,6 +535,7 @@ pub fn infer_quality(
             .ok_or("Lingua del grafo mancante")?;
         let database = crate::wiki_database(language, graph["database"].as_str())?;
         let manifest: ContentManifest = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+        let downloads = super::collection_download_root(manifest_path)?;
         if graph["source"] != format!("Wikimedia SQL dumps / {database}")
             || graph["complete"] != true
             || manifest.source != "mediawiki_content_current"
@@ -641,13 +642,10 @@ pub fn infer_quality(
         for (name, record) in &manifest.files {
             let path =
                 std::path::Path::new(record["path"].as_str().ok_or("Percorso XML mancante")?);
-            let signature = file_signature(path)?;
             let digest = record["sha256_local"]
                 .as_str()
                 .ok_or("Checksum XML mancante")?;
-            if Some(signature.0) != record["bytes"].as_u64()
-                || record["sha256_local"] != record["sha256_publisher"]
-            {
+            if record["sha256_local"] != record["sha256_publisher"] {
                 return Err("Checksum contenuto XML errato".into());
             }
             let previous = db
@@ -663,8 +661,24 @@ pub fn infer_quality(
                     },
                 )
                 .optional()?;
+            if downloads.is_some()
+                && !path.exists()
+                && previous.as_ref().is_some_and(|(hash, size, _)| {
+                    hash == digest && Some(*size) == record["bytes"].as_u64()
+                })
+            {
+                eprintln!("CHECKPOINT XML {name}: verified_reuse (archivio già consumato)");
+                continue;
+            }
+            let signature = file_signature(path)?;
+            if Some(signature.0) != record["bytes"].as_u64() {
+                return Err("Checksum contenuto XML errato".into());
+            }
             if previous == Some((digest.to_owned(), signature.0, signature.1)) {
                 eprintln!("CHECKPOINT XML {name}: verified_reuse");
+                if let Some(root) = &downloads {
+                    super::remove_owned_file(root, path)?;
+                }
                 continue;
             }
             if hash(path)? != digest {
@@ -693,6 +707,9 @@ pub fn infer_quality(
                 "INSERT OR REPLACE INTO quality_parts VALUES(?,?,?,?)",
                 params![name, digest, signature.0, signature.1],
             )?;
+            if let Some(root) = &downloads {
+                super::remove_owned_file(root, path)?;
+            }
         }
         let n = db.query_row(
             "SELECT COUNT(*) FROM quality_pages WHERE features IS NOT NULL",
@@ -821,6 +838,12 @@ pub fn infer_quality(
             writer.flush()?;
             Ok(())
         })?;
+        // Once the atomic supplement exists, this extraction database has no
+        // remaining consumers. SQL staging is still needed by analysis.
+        db.close().map_err(|(_, error)| error)?;
+        if super::collection_area(work_dir, "staging")? {
+            super::remove_owned_file(work_dir, &stage_path)?;
+        }
         Ok(metadata)
     })
 }

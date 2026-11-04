@@ -878,6 +878,7 @@ pub fn import_history(
             return Err("Cache delle identità History vuota".into());
         }
         let manifest: HistoryManifest = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+        let downloads = super::collection_download_root(manifest_path)?;
         let database = crate::wiki_database(&manifest.language, manifest.database.as_deref())?;
         let stage = work_dir.join(format!("{database}-{}.sqlite", manifest.sql_release));
         if !stage.is_file() {
@@ -908,12 +909,24 @@ pub fn import_history(
             &stage,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE,
         )?;
-        connection.execute_batch(&format!("PRAGMA temp_store=FILE; PRAGMA cache_size=-{};
+        let private_stage = super::collection_area(work_dir, "staging")?;
+        // A completed private import may have released these bulky working
+        // tables. If its supplement must be rebuilt, scan the archives anew;
+        // table checkpoints alone cannot stand in for retired rows.
+        let history_rows_retired = private_stage && connection.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('history_initial','history_page_event','history_edit','history_creation')",
+            [], |r| r.get::<_, u64>(0),
+        )? != 4;
+        connection.execute_batch(&format!("PRAGMA temp_store=FILE; PRAGMA cache_size=-{}; BEGIN;
         CREATE TABLE IF NOT EXISTS history_imported(file TEXT NOT NULL,phase TEXT NOT NULL,sha256 TEXT NOT NULL,PRIMARY KEY(file,phase));
         CREATE TABLE IF NOT EXISTS history_initial(file TEXT NOT NULL,page_id INTEGER NOT NULL,revision_id INTEGER NOT NULL,at TEXT NOT NULL,user_id INTEGER,hidden INTEGER NOT NULL,groups TEXT,tags TEXT,registration TEXT,page_created TEXT,page_first TEXT,before_creation INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS history_page_event(file TEXT NOT NULL,page_id INTEGER NOT NULL,event TEXT NOT NULL,at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS history_edit(file TEXT NOT NULL,revision_id INTEGER NOT NULL,user_id INTEGER NOT NULL,at TEXT NOT NULL,namespace INTEGER NOT NULL);
         CREATE TABLE IF NOT EXISTS history_creation(file TEXT NOT NULL,page_id INTEGER NOT NULL,created TEXT NOT NULL,PRIMARY KEY(file,page_id,created));", options.cache_mib*1024))?;
+        if history_rows_retired {
+            connection.execute("DELETE FROM history_imported", [])?;
+        }
+        connection.execute_batch("COMMIT")?;
         let file = |name: &str| {
             manifest
                 .files
@@ -949,9 +962,22 @@ pub fn import_history(
             let digest = data["sha256_local"]
                 .as_str()
                 .ok_or("Checksum History mancante")?;
-            if !path.is_file()
-                || Some(path.metadata()?.len()) != data["bytes"].as_u64()
-                || DumpClient::<WikimediaHttp>::verified_sha256(path, None, Some(digest))?.is_none()
+            let consumed = downloads.is_some()
+                && !path.exists()
+                && connection
+                    .query_row(
+                        "SELECT sha256 FROM history_imported WHERE file=? AND phase='initial'",
+                        [name],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .as_deref()
+                    == Some(&format!("{digest}:{HISTORY_RULE}"));
+            if !consumed
+                && (!path.is_file()
+                    || Some(path.metadata()?.len()) != data["bytes"].as_u64()
+                    || DumpClient::<WikimediaHttp>::verified_sha256(path, None, Some(digest))?
+                        .is_none())
             {
                 return Err(format!("Partizione MediaWiki History modificata: {name}").into());
             }
@@ -1066,6 +1092,13 @@ pub fn import_history(
                     options,
                 },
             )?;
+            // Both passes are durable. The archive is no longer needed even if
+            // metrics or supplement publication is interrupted afterwards.
+            if let Some(root) = &downloads {
+                let path =
+                    std::path::Path::new(data["path"].as_str().ok_or("Percorso History mancante")?);
+                super::remove_owned_file(root, path)?;
+            }
         }
         connection.execute_batch(
             "CREATE INDEX IF NOT EXISTS history_edit_user_time ON history_edit(user_id,at)",
@@ -1097,6 +1130,15 @@ pub fn import_history(
             writer.flush()?;
             Ok(())
         })?;
+        if private_stage {
+            connection.execute_batch(
+                "BEGIN;
+                DROP TABLE history_initial; DROP TABLE history_page_event;
+                DROP TABLE history_edit; DROP TABLE history_creation;
+                COMMIT; PRAGMA incremental_vacuum;",
+            )?;
+            eprintln!("PULIZIA History {database}: tabelle di lavoro eliminate dopo il supplemento completo");
+        }
         eprintln!(
             "Cronologia da dump: {} voci; {}",
             records.len(),

@@ -539,10 +539,11 @@ pub fn import_graph(
 ) -> DumpResult<usize> {
     crate::runtime::phase("import.sql", || {
         crate::runtime::check_cancelled()?;
-        use rusqlite::params;
+        use rusqlite::{params, OptionalExtension};
         use serde_json::{json, Value};
         use std::io::Write;
         let manifest: Value = serde_json::from_slice(&std::fs::read(manifest_path)?)?;
+        let downloads = super::collection_download_root(manifest_path)?;
         let language = manifest["language"]
             .as_str()
             .ok_or("Lingua del manifest mancante")?;
@@ -576,6 +577,9 @@ pub fn import_graph(
         }
         std::fs::create_dir_all(work_dir)?;
         let connection = rusqlite::Connection::open(&stage)?;
+        if super::collection_area(work_dir, "staging")? {
+            connection.execute_batch("PRAGMA auto_vacuum=INCREMENTAL")?;
+        }
         connection.execute_batch("PRAGMA temp_store=FILE; PRAGMA cache_size=-8192;
         CREATE TABLE IF NOT EXISTS imported(table_name TEXT PRIMARY KEY, sha256 TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS dump_page(id INTEGER PRIMARY KEY, ns INTEGER NOT NULL,title TEXT NOT NULL, redirect INTEGER NOT NULL, length INTEGER NOT NULL, revision INTEGER);
@@ -592,14 +596,30 @@ pub fn import_graph(
             let digest = record["sha256_local"]
                 .as_str()
                 .ok_or("Checksum SQL mancante")?;
-            if !path.is_file()
-                || path.metadata()?.len()
-                    != record["bytes"].as_u64().ok_or("Dimensione SQL mancante")?
-                || DumpClient::<WikimediaHttp>::verified_sha256(path, None, Some(digest))?.is_none()
+            let consumed = downloads.is_some()
+                && !path.exists()
+                && connection
+                    .query_row(
+                        "SELECT sha256 FROM imported WHERE table_name=?",
+                        [table],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .as_deref()
+                    == Some(digest);
+            if !consumed
+                && (!path.is_file()
+                    || path.metadata()?.len()
+                        != record["bytes"].as_u64().ok_or("Dimensione SQL mancante")?
+                    || DumpClient::<WikimediaHttp>::verified_sha256(path, None, Some(digest))?
+                        .is_none())
             {
                 return Err(format!("Dump modificato o incompleto: {table}").into());
             }
             load_sql_table(&connection, table, path, digest)?;
+            if let Some(root) = &downloads {
+                super::remove_owned_file(root, path)?;
+            }
         }
         connection.execute_batch(
             "CREATE INDEX IF NOT EXISTS dump_link_source ON dump_link(source_id);

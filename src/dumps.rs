@@ -39,9 +39,13 @@ use canonical::{python_json, write_atomic, write_sorted_json, CanonicalDigest};
 #[cfg(feature = "cli")]
 mod publication;
 #[cfg(feature = "cli")]
+use publication::collection_download_root;
+#[cfg(feature = "cli")]
 pub use publication::{analyze_file, rebuild_dashboard};
 #[cfg(feature = "cli")]
-pub(crate) use publication::{collection_staging, dataset_filename, COLLECTION_STAGING};
+pub(crate) use publication::{
+    collection_area, collection_staging, dataset_filename, remove_owned_file, COLLECTION_STAGING,
+};
 #[cfg(feature = "cli")]
 use publication::{
     export_directory, manifest_entry, prepare_member, publish_prepared, reuse_export,

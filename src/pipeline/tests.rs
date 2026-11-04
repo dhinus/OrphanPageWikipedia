@@ -379,7 +379,7 @@ impl Steps for FakeSteps {
                     .collect::<BTreeSet<_>>()
                     .into_iter()
                     .collect::<Vec<_>>();
-                self.publish(&languages, &folder, &self.root.join("imported"));
+                self.publish(&languages, &folder, Path::new(&value("--input-dir")));
             }
             _ => panic!("Unexpected test command {command}"),
         }
@@ -454,6 +454,86 @@ fn relational_collection_is_atomic_resumable_and_removes_only_its_own_files() {
 }
 
 #[test]
+fn publication_retry_reuses_verified_exports_after_inputs_and_caches_have_been_reclaimed() {
+    let mut f = Fixture::new();
+    let destination = f.root.join("collection.sqlite");
+    f.options.collection_database = Some(destination.clone());
+    std::fs::write(&destination, "previous publication").unwrap();
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(destination.with_extension("publish.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    assert!(collection_workflow(&f.options, &mut f.steps).is_err());
+    assert_eq!(
+        std::fs::read_to_string(&destination).unwrap(),
+        "previous publication"
+    );
+    for base in [&f.options.import_dir, &f.options.work_dir] {
+        let private = std::fs::read_dir(base)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(
+            std::fs::read_dir(private).unwrap().count(),
+            1,
+            "only ownership remains"
+        );
+    }
+    f.reset();
+    drop(lock);
+    collection_workflow(&f.options, &mut f.steps).unwrap();
+    assert!(f.steps.calls.is_empty());
+    crate::store::Census::open(&destination)
+        .unwrap()
+        .verify()
+        .unwrap();
+}
+
+#[test]
+fn publication_retry_rejects_changed_export_bytes_before_reusing_the_ready_checkpoint() {
+    let mut f = Fixture::new();
+    let destination = f.root.join("collection.sqlite");
+    f.options.collection_database = Some(destination.clone());
+    let lock = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(destination.with_extension("publish.lock"))
+        .unwrap();
+    lock.try_lock().unwrap();
+    assert!(collection_workflow(&f.options, &mut f.steps).is_err());
+    let folder = std::fs::read_dir(&f.options.output_dir)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let manifest = read_json(&folder.join("manifest.json")).unwrap();
+    let source = folder.join(manifest[0]["file"].as_str().unwrap());
+    OpenOptions::new()
+        .append(true)
+        .open(source)
+        .unwrap()
+        .write_all(b" ")
+        .unwrap();
+    f.reset();
+    drop(lock);
+    collection_workflow(&f.options, &mut f.steps).unwrap();
+    assert!(f.steps.calls.iter().any(|args| args[0] == "import-dumps"));
+    crate::store::Census::open(&destination)
+        .unwrap()
+        .verify()
+        .unwrap();
+}
+
+#[test]
 fn private_collection_outputs_reuse_virtual_resources_only_with_verified_ownership() {
     let mut f = Fixture::new();
     f.options.selected.push(("lmo".into(), "lmowiki".into()));
@@ -521,6 +601,14 @@ fn relational_cleanup_rejects_manifest_paths_outside_the_work_area() {
         &f.options.dump_root
     )
     .is_err());
+    assert!(dumps::remove_owned_file(&f.options.dump_root, &outside).is_err());
+    #[cfg(unix)]
+    {
+        let link = f.options.dump_root.join("borrowed.sql.gz");
+        std::os::unix::fs::symlink(&outside, &link).unwrap();
+        assert!(dumps::remove_owned_file(&f.options.dump_root, &link).is_err());
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+    }
     assert_eq!(
         std::fs::read_to_string(outside).unwrap(),
         "existing research"

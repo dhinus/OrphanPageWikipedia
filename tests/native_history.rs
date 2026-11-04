@@ -99,6 +99,120 @@ fn revision(page: i64, user: i64, at: &str) -> Vec<String> {
 }
 
 #[test]
+fn private_history_archives_are_consumed_after_both_passes_and_remain_resumable() {
+    let w = Workspace::new(2);
+    let identity = json!({"rule":"relational_census_v1","test":"history consumption"});
+    let hash = orphanwiki::dumps::canonical_json_sha256(&identity).unwrap();
+    let root = w.0.join(format!(".collection-{}-downloads", &hash[..16]));
+    let folder = root.join("vecwiki");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(root.join(".owner.json"), identity.to_string()).unwrap();
+    let mut files = serde_json::Map::new();
+    for (id, name) in [(1, "a.tsv.bz2"), (2, "b.tsv.bz2")] {
+        let mut record = w.partition(name, &[revision(id, 43, "2020-01-01 00:00:00")]);
+        let path = folder.join(name);
+        fs::rename(record["path"].as_str().unwrap(), &path).unwrap();
+        record["path"] = json!(path);
+        files.insert(name.into(), record);
+    }
+    let original = w.manifest(json!(files));
+    let manifest = folder.join("manifest.json");
+    fs::rename(original, &manifest).unwrap();
+    let first = w.import(&manifest, HistoryOptions::default()).unwrap();
+    for name in ["a.tsv.bz2", "b.tsv.bz2"] {
+        assert!(!folder.join(name).exists());
+        assert_eq!(
+            w.db()
+                .query_row(
+                    "SELECT COUNT(*) FROM history_imported WHERE file=?",
+                    [name],
+                    |r| r.get::<_, u64>(0)
+                )
+                .unwrap(),
+            2
+        );
+    }
+    assert_eq!(
+        w.import(&manifest, HistoryOptions::default()).unwrap(),
+        first
+    );
+    w.db()
+        .execute(
+            "DELETE FROM history_imported WHERE file='a.tsv.bz2' AND phase='activity'",
+            [],
+        )
+        .unwrap();
+    assert!(w.import(&manifest, HistoryOptions::default()).is_err());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(w.0.join("history.json")).unwrap()).unwrap(),
+        first
+    );
+}
+
+#[test]
+fn private_history_working_rows_release_disk_space_without_changing_the_supplement() {
+    let w = Workspace::new(2);
+    let mut rows = vec![
+        revision(1, 43, "2020-01-01 00:00:00"),
+        revision(2, 43, "2021-01-01 00:00:00"),
+    ];
+    for id in 1..=2048 {
+        let mut edit = revision(1, 43, "2019-01-01 00:00:00");
+        edit[3] = "update".into();
+        edit[60] = (1000 + id).to_string();
+        edit[61] = "1".into();
+        rows.push(edit);
+    }
+    let manifest = w.manifest(json!({"all.tsv.bz2":w.partition("all.tsv.bz2", &rows)}));
+    let expected = w.import(&manifest, HistoryOptions::default()).unwrap();
+    let identity = json!({"rule":"relational_census_v1","test":"history working rows"});
+    let hash = orphanwiki::dumps::canonical_json_sha256(&identity).unwrap();
+    let work = w.0.join(format!(".collection-{}-staging", &hash[..16]));
+    fs::create_dir(&work).unwrap();
+    fs::write(work.join(".owner.json"), identity.to_string()).unwrap();
+    let stage = work.join("vecwiki-20261001.sqlite");
+    fs::rename(w.0.join("vecwiki-20261001.sqlite"), &stage).unwrap();
+    {
+        let db = Connection::open(&stage).unwrap();
+        db.execute_batch("PRAGMA auto_vacuum=INCREMENTAL; VACUUM")
+            .unwrap();
+    }
+    let bytes = fs::metadata(&stage).unwrap().len();
+    let output = w.0.join("history.json");
+    import_history(&manifest, &output, &work, HistoryOptions::default()).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(&output).unwrap()).unwrap(),
+        expected
+    );
+    assert!(fs::metadata(&stage).unwrap().len() < bytes);
+    let db = Connection::open(&stage).unwrap();
+    assert_eq!(
+        db.query_row("SELECT COUNT(*) FROM history_imported", [], |r| r
+            .get::<_, u64>(0))
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE name='history_edit'",
+            [],
+            |r| r.get::<_, u64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    drop(db);
+    // A missing or rejected supplement must rebuild retired rows rather than
+    // accept the old partition markers as if the rows were still available.
+    fs::remove_file(&output).unwrap();
+    import_history(&manifest, &output, &work, HistoryOptions::default()).unwrap();
+    assert_eq!(
+        serde_json::from_slice::<Value>(&fs::read(output).unwrap()).unwrap(),
+        expected
+    );
+}
+
+#[test]
 fn reconstruction_attribution_current_flags_and_strict_activity_boundaries() {
     let workspace = Workspace::new(15);
     let at = "2026-03-01 12:00:00.0";

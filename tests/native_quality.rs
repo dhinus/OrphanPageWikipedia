@@ -186,6 +186,69 @@ mod content {
     }
 
     #[test]
+    fn private_xml_parts_are_consumed_incrementally_and_staging_is_released_after_export() {
+        let w = Workspace::new();
+        w.fixtures();
+        let identity = json!({"rule":"relational_census_v1","test":"quality consumption"});
+        let hash = orphanwiki::dumps::canonical_json_sha256(&identity).unwrap();
+        let root = w.0.join(format!(".collection-{}-downloads", &hash[..16]));
+        let folder = root.join("vecwiki");
+        let work = w.0.join(format!(".collection-{}-staging", &hash[..16]));
+        fs::create_dir_all(&folder).unwrap();
+        fs::create_dir(&work).unwrap();
+        for area in [&root, &work] {
+            fs::write(area.join(".owner.json"), identity.to_string()).unwrap();
+        }
+        let original = w.0.join("content.json");
+        let mut manifest: Value = serde_json::from_slice(&fs::read(&original).unwrap()).unwrap();
+        for record in manifest["files"].as_object_mut().unwrap().values_mut() {
+            let old = PathBuf::from(record["path"].as_str().unwrap());
+            let path = folder.join(old.file_name().unwrap());
+            fs::rename(old, &path).unwrap();
+            record["path"] = json!(path);
+        }
+        let path = folder.join("content.json");
+        fs::write(&path, manifest.to_string()).unwrap();
+        fs::rename(
+            w.0.join("vecwiki-20261001.sqlite"),
+            work.join("vecwiki-20261001.sqlite"),
+        )
+        .unwrap();
+        let second = folder.join("b.xml.bz2");
+        let bytes = fs::read(&second).unwrap();
+        fs::write(&second, b"broken").unwrap();
+        let import = || {
+            infer_quality(
+                &w.0.join("vec-raw.json"),
+                &path,
+                &w.0.join("vec-quality.json"),
+                &work,
+                &w.0.join("config/quality.json"),
+            )
+        };
+        assert!(import().is_err());
+        assert!(!folder.join("a.xml.bz2").exists());
+        assert!(second.exists());
+        let stage = work.join("vecwiki-20261001-quality.sqlite");
+        assert!(stage.exists());
+        assert!(!w.0.join("vec-quality.json").exists());
+        fs::write(&second, bytes).unwrap();
+        import().unwrap();
+        assert!(!second.exists());
+        assert!(!stage.exists());
+        let actual: Value =
+            serde_json::from_slice(&fs::read(w.0.join("vec-quality.json")).unwrap()).unwrap();
+        let baseline = Workspace::new();
+        baseline.fixtures();
+        let expected = baseline.import().unwrap();
+        assert_eq!(actual["pages"], expected["pages"]);
+        assert_eq!(
+            actual["metadata"]["normalizers"],
+            expected["metadata"]["normalizers"]
+        );
+    }
+
+    #[test]
     fn complete_quality_census_keeps_revision_relations_empty_text_and_sqlite_only_features() {
         let workspace = Workspace::new();
         workspace.fixtures();

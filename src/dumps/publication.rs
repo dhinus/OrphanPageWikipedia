@@ -16,6 +16,13 @@ pub(crate) const COLLECTION_STAGING: &str = "relational_collection_staging_v1";
 /// omit file transports that the relational service reconstructs from rows.
 #[cfg(feature = "cli")]
 pub(crate) fn collection_staging(folder: &std::path::Path) -> DumpResult<bool> {
+    collection_area(folder, "exports")
+}
+
+/// Ownership is explicit and bound to both the collection identity and role.
+/// Ordinary stage commands must never consume user-supplied source files.
+#[cfg(feature = "cli")]
+pub(crate) fn collection_area(folder: &std::path::Path, role: &str) -> DumpResult<bool> {
     let bytes = match std::fs::read(folder.join(".owner.json")) {
         Ok(bytes) => bytes,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
@@ -23,13 +30,47 @@ pub(crate) fn collection_staging(folder: &std::path::Path) -> DumpResult<bool> {
     };
     let identity: serde_json::Value = serde_json::from_slice(&bytes)?;
     let hash = canonical_json_sha256(&identity)?;
-    let expected = format!(".collection-{}-exports", &hash[..16]);
+    let expected = format!(".collection-{}-{role}", &hash[..16]);
     if identity["rule"] != crate::store::RULE
         || folder.file_name().and_then(|s| s.to_str()) != Some(expected.as_str())
+        || std::fs::symlink_metadata(folder)?.file_type().is_symlink()
+        || std::fs::symlink_metadata(folder.join(".owner.json"))?
+            .file_type()
+            .is_symlink()
     {
-        return Err("Identità dell'area di esportazione della raccolta non valida".into());
+        return Err("Identità dell'area privata della raccolta non valida".into());
     }
     Ok(true)
+}
+
+#[cfg(feature = "cli")]
+pub(super) fn collection_download_root(
+    manifest: &std::path::Path,
+) -> DumpResult<Option<std::path::PathBuf>> {
+    let Some(root) = manifest.parent().and_then(std::path::Path::parent) else {
+        return Ok(None);
+    };
+    Ok(collection_area(root, "downloads")?.then(|| root.to_owned()))
+}
+
+/// The caller has verified ownership and a durable replacement/checkpoint.
+#[cfg(feature = "cli")]
+pub(crate) fn remove_owned_file(root: &std::path::Path, path: &std::path::Path) -> DumpResult<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if !metadata.is_file() || !path.canonicalize()?.starts_with(root.canonicalize()?) {
+        return Err("Il file da eliminare non appartiene all'area di lavoro".into());
+    }
+    std::fs::remove_file(path)?;
+    eprintln!(
+        "PULIZIA {}: {} byte liberati",
+        path.display(),
+        metadata.len()
+    );
+    Ok(())
 }
 
 #[cfg(feature = "cli")]

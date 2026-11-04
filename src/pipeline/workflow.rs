@@ -50,6 +50,69 @@ pub(super) fn remove_downloads(
     Ok(())
 }
 
+/// A ready publication no longer depends on graphs, supplements or caches.
+/// Retain checksums of its exact files and original manifests so publication can
+/// be retried after those bulky inputs have been reclaimed.
+fn publication_files(options: &PipelineOptions) -> PipelineResult<Value> {
+    fn visit(folder: &Path, files: &mut Map<String, Value>) -> PipelineResult<()> {
+        for entry in std::fs::read_dir(folder)? {
+            let entry = entry?;
+            let kind = entry.file_type()?;
+            if kind.is_dir() {
+                visit(&entry.path(), files)?;
+            } else if kind.is_file() {
+                if entry.file_name() != ".publication-ready.json" {
+                    files.insert(
+                        path_text(&entry.path()),
+                        json!(dumps::file_sha256(&entry.path())?),
+                    );
+                }
+            } else {
+                return Err("Risorsa privata della pubblicazione non regolare".into());
+            }
+        }
+        Ok(())
+    }
+    let mut files = Map::new();
+    visit(&options.output_dir, &mut files)?;
+    for (_, database) in &options.selected {
+        for name in [
+            format!(
+                "manifest-{}-{}.json",
+                options.sql_release, options.history_release
+            ),
+            format!("content-{}.json", options.content_release),
+        ] {
+            let path = options.dump_root.join(database).join(name);
+            files.insert(path_text(&path), json!(dumps::file_sha256(&path)?));
+        }
+    }
+    Ok(Value::Object(files))
+}
+
+fn clear_collection_area(folder: &Path, role: &str, identity: &Value) -> PipelineResult<()> {
+    if !dumps::collection_area(folder, role)?
+        || read_json(&folder.join(".owner.json"))? != *identity
+    {
+        return Err("Area temporanea non appartenente alla raccolta".into());
+    }
+    for entry in std::fs::read_dir(folder)? {
+        let entry = entry?;
+        if entry.file_name() == ".owner.json" {
+            continue;
+        }
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            std::fs::remove_dir_all(entry.path())?;
+        } else if kind.is_file() {
+            dumps::remove_owned_file(folder, &entry.path())?;
+        } else {
+            return Err("File non regolare nell'area temporanea".into());
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn collection_workflow(
     options: &PipelineOptions,
     steps: &mut impl Steps,
@@ -58,7 +121,7 @@ pub(super) fn collection_workflow(
         return workflow(options, steps);
     };
     if options.plan {
-        steps.log(&format!("PUBBLICAZIONE database {}; una raccolta completa; dump eliminati dopo importazione, intermedi dopo pubblicazione",destination.display()))?;
+        steps.log(&format!("PUBBLICAZIONE database {}; dump consumati per tabella/partizione; staging eliminati dopo l'ultimo utilizzo verificato",destination.display()))?;
         return workflow(options, steps);
     }
     let identity = json!({"rule":crate::store::RULE,"languages":options.selected,"sql_release":options.sql_release,
@@ -95,9 +158,15 @@ pub(super) fn collection_workflow(
             .join(format!(".collection-{}-exports", &hash[..16])),
     ];
     let cleanup = || -> PipelineResult<()> {
-        for directory in &directories {
+        for (directory, role) in
+            directories
+                .iter()
+                .zip(["downloads", "imports", "staging", "exports"])
+        {
             if directory.exists() {
-                if read_json(&directory.join(".owner.json"))? != identity {
+                if !dumps::collection_area(directory, role)?
+                    || read_json(&directory.join(".owner.json"))? != identity
+                {
                     return Err("Area temporanea non appartenente alla raccolta".into());
                 }
                 std::fs::remove_dir_all(directory)?;
@@ -121,9 +190,14 @@ pub(super) fn collection_workflow(
         cleanup()?;
         return Ok(());
     }
-    for directory in &directories {
+    for (directory, role) in directories
+        .iter()
+        .zip(["downloads", "imports", "staging", "exports"])
+    {
         if directory.exists() {
-            if read_json(&directory.join(".owner.json"))? != identity {
+            if !dumps::collection_area(directory, role)?
+                || read_json(&directory.join(".owner.json"))? != identity
+            {
                 return Err("Area temporanea non appartenente alla raccolta".into());
             }
         } else {
@@ -138,7 +212,30 @@ pub(super) fn collection_workflow(
     private.import_dir = directories[1].clone();
     private.work_dir = directories[2].clone();
     private.output_dir = directories[3].clone();
-    workflow(&private, steps)?;
+    let ready_path = private.output_dir.join(".publication-ready.json");
+    let ready = if options.force {
+        false
+    } else {
+        (|| -> PipelineResult<bool> {
+            let saved = read_json(&ready_path)?;
+            Ok(saved["identity"] == identity && saved["files"] == publication_files(&private)?)
+        })()
+        .unwrap_or(false)
+    };
+    if ready {
+        steps.log("SALTA elaborazione: pubblicazione pronta con file e manifest verificati")?;
+    } else {
+        workflow(&private, steps)?;
+        dumps::DumpClient::<dumps::WikimediaHttp>::write_json(
+            &ready_path,
+            &json!({"identity":identity,"files":publication_files(&private)?}),
+        )?;
+    }
+    clear_collection_area(&private.import_dir, "imports", &identity)?;
+    clear_collection_area(&private.work_dir, "staging", &identity)?;
+    steps.log(
+        "Grafi, supplementi e cache eliminati: restano solo i file necessari alla pubblicazione",
+    )?;
     steps.log("Pubblicazione atomica del database relazionale completo")?;
     crate::store::publish(&private.output_dir, destination, &identity)?;
     cleanup()?;

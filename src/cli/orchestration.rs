@@ -49,7 +49,7 @@ impl Invocation {
                 .env("ORPHANWIKI_MEMORY_SCOPE", "1")
                 .current_dir(original_directory);
             eprintln!("Avvio pipeline in un gruppo con RAM massima {maximum} byte, inclusi tutti i worker; swap disabilitata");
-            return Err(format!("Impossibile applicare il limite RAM tramite systemd-run: {}. Avviare in un servizio/cgroup con MemoryMax={maximum}; nessuna raccolta avviata", command.exec()));
+            Err(format!("Impossibile applicare il limite RAM tramite systemd-run: {}. Avviare in un servizio/cgroup con MemoryMax={maximum}; nessuna raccolta avviata", command.exec()))
         }
         #[cfg(not(target_os = "linux"))]
         Err("Il limite RAM complessivo richiede Linux con cgroup v2".into())

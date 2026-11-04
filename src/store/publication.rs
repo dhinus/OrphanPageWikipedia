@@ -239,9 +239,8 @@ pub fn publish(folder: &Path, destination: &Path, identity: &Value) -> DumpResul
             {
                 let name = filename(&entry["creator_index_file"])?;
                 visit_creators(&folder.join(name), &metadata, count, &mut |row| {
-                    tx.execute(
-                        "INSERT INTO creators VALUES(?,?,?,?,?,?,?)",
-                        params![
+                    tx.prepare_cached("INSERT INTO creators VALUES(?,?,?,?,?,?,?)")?
+                        .execute(params![
                             filename(&entry["file"])?,
                             row["key"].as_str().ok_or("Creatore non valido")?,
                             row["key"]
@@ -252,8 +251,7 @@ pub fn publish(folder: &Path, destination: &Path, identity: &Value) -> DumpResul
                             row["total"].as_i64().ok_or("Totale creatore mancante")?,
                             row["orphans"].as_i64().ok_or("Totale orfane mancante")?,
                             encode(&row)?
-                        ],
-                    )?;
+                        ])?;
                     Ok(())
                 })?;
             }
@@ -541,9 +539,8 @@ fn import_member(
             .map(hidden_category)
             .transpose()?
             .unwrap_or((false, false));
-        tx.execute(
-            "INSERT INTO pages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            params![
+        tx.prepare_cached("INSERT INTO pages VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)")?
+            .execute(params![
                 language,
                 id,
                 row.get::<_, i64>(2)?,
@@ -562,15 +559,16 @@ fn import_member(
                     .map(|time| time.timestamp_millis()),
                 page["topic_status"].as_str(),
                 encode(&attributes)?
-            ],
-        )?;
+            ])?;
         if page["topic_status"] == "predicted" {
             if let Some(labels) = page["topic_labels"].as_array() {
                 for label in labels {
-                    tx.execute(
-                        "INSERT INTO topics VALUES(?,?,?)",
-                        params![language, id, label.as_str().ok_or("Tema non valido")?],
-                    )?;
+                    tx.prepare_cached("INSERT INTO topics VALUES(?,?,?)")?
+                        .execute(params![
+                            language,
+                            id,
+                            label.as_str().ok_or("Tema non valido")?
+                        ])?;
                 }
             }
         }
@@ -590,16 +588,14 @@ fn import_member(
             .ok_or("Candidate non valide")?
             .remove("candidates")
             .ok_or("Candidate mancanti")?;
-        tx.execute(
-            "INSERT INTO targets VALUES(?,?,?,?,?)",
-            params![
+        tx.prepare_cached("INSERT INTO targets VALUES(?,?,?,?,?)")?
+            .execute(params![
                 language,
                 id,
                 record["candidate_count"].as_i64(),
                 record["status"].as_str(),
                 encode(&record)?
-            ],
-        )?;
+            ])?;
         let candidates = candidates.as_array().ok_or("Candidate non valide")?;
         if record["candidate_count"]
             .as_u64()
@@ -630,10 +626,15 @@ fn import_member(
                     .ok_or("Candidata non valida")?
                     .remove(field);
             }
-            tx.execute(
-                "INSERT INTO candidates VALUES(?,?,?,?,?,?)",
-                params![language, id, source, position, title, encode(&candidate)?],
-            )?;
+            tx.prepare_cached("INSERT INTO candidates VALUES(?,?,?,?,?,?)")?
+                .execute(params![
+                    language,
+                    id,
+                    source,
+                    position,
+                    title,
+                    encode(&candidate)?
+                ])?;
             for (position, edge) in edges
                 .as_array()
                 .ok_or("Evidenze non valide")?
@@ -663,9 +664,8 @@ fn import_member(
                         .ok_or("Evidenza non valida")?
                         .remove(field);
                 }
-                tx.execute(
-                    "INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?)",
-                    params![
+                tx.prepare_cached("INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?)")?
+                    .execute(params![
                         language,
                         id,
                         source,
@@ -674,8 +674,7 @@ fn import_member(
                         source_title,
                         target_title,
                         encode(&attributes)?
-                    ],
-                )?;
+                    ])?;
             }
         }
         for (position, source) in ids.iter().enumerate() {
@@ -689,10 +688,8 @@ fn import_member(
                 .iter()
                 .position(|e| e == selected)
                 .ok_or("Evidenza shortlist non corrispondente")?;
-            tx.execute(
-                "INSERT INTO shortlists VALUES(?,?,?,?,?)",
-                params![language, id, source, position, edge],
-            )?;
+            tx.prepare_cached("INSERT INTO shortlists VALUES(?,?,?,?,?)")?
+                .execute(params![language, id, source, position, edge])?;
         }
     }
     signatures.push((path, source.signature));

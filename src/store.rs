@@ -37,12 +37,24 @@ fn encode(value: &Value) -> DumpResult<String> {
     Ok(serde_json::to_string(value)?)
 }
 
-fn intern(db: &Connection, value: &str) -> DumpResult<i64> {
+fn intern(
+    db: &Connection,
+    cache: &mut std::collections::HashMap<String, i64>,
+    value: &str,
+) -> DumpResult<i64> {
+    if let Some(id) = cache.get(value) {
+        return Ok(*id);
+    }
     db.prepare_cached("INSERT OR IGNORE INTO texts(value) VALUES(?)")?
         .execute([value])?;
-    Ok(db
+    let id = db
         .prepare_cached("SELECT id FROM texts WHERE value=?")?
-        .query_row([value], |r| r.get(0))?)
+        .query_row([value], |r| r.get(0))?;
+    if cache.len() == 4096 {
+        cache.clear();
+    }
+    cache.insert(value.to_owned(), id);
+    Ok(id)
 }
 
 fn decode_page(data: String, id: i64, title: String, orphan: bool) -> DumpResult<Value> {
@@ -271,5 +283,37 @@ impl Census {
             },
         )?;
         decode_page(data, id, title, orphan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn title_cache_eviction_keeps_exact_sql_identities_and_a_bounded_number_of_keys() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE texts(id INTEGER PRIMARY KEY,value TEXT NOT NULL UNIQUE)")
+            .unwrap();
+        let mut cache = std::collections::HashMap::new();
+        let mut expected = Vec::new();
+        for value in ["", "è", "e\u{0300}", "雪", "L'àncora", "Same title"] {
+            let id = intern(&db, &mut cache, value).unwrap();
+            assert_eq!(intern(&db, &mut cache, value).unwrap(), id);
+            expected.push((value, id));
+        }
+        assert_ne!(expected[1].1, expected[2].1);
+        for id in 0..9000 {
+            intern(&db, &mut cache, &format!("Other title {id}")).unwrap();
+            assert!(cache.len() <= 4096);
+        }
+        for (value, id) in expected {
+            assert_eq!(intern(&db, &mut cache, value).unwrap(), id);
+        }
+        assert_eq!(
+            db.query_row("SELECT COUNT(*) FROM texts", [], |row| row.get::<_, u64>(0))
+                .unwrap(),
+            9006
+        );
     }
 }

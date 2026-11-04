@@ -573,6 +573,7 @@ fn import_member(
             }
         }
     }
+    let mut title_cache = std::collections::HashMap::new();
     let mut query = source
         .database
         .prepare("SELECT id,data FROM candidates ORDER BY position")?;
@@ -616,6 +617,7 @@ fn import_member(
                 .ok_or("Evidenze mancanti")?;
             let title = intern(
                 tx,
+                &mut title_cache,
                 candidate["title"]
                     .as_str()
                     .ok_or("Titolo candidata mancante")?,
@@ -647,12 +649,14 @@ fn import_member(
                     .ok_or("Lingua di riferimento non valida")?;
                 let source_title = intern(
                     tx,
+                    &mut title_cache,
                     edge["source_title"]
                         .as_str()
                         .ok_or("Titolo riferimento mancante")?,
                 )?;
                 let target_title = intern(
                     tx,
+                    &mut title_cache,
                     edge["target_title"]
                         .as_str()
                         .ok_or("Titolo riferimento mancante")?,

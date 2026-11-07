@@ -392,7 +392,10 @@ impl<T: DumpHttp> DumpClient<T> {
             ));
         }
         let Some(checksum) = Self::verified_sha256(&source, sha1, sha256)? else {
-            return Err(format!("Checksum Wikimedia errato nel mirror: {}", source.display()));
+            return Err(format!(
+                "Checksum Wikimedia errato nel mirror: {}",
+                source.display()
+            ));
         };
         Ok((checksum, source))
     }

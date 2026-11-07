@@ -83,7 +83,9 @@ pub(crate) fn remove_consumed_download(
     if record["mirror"] == true {
         return Ok(());
     }
-    let path = record["path"].as_str().ok_or("Percorso del dump mancante")?;
+    let path = record["path"]
+        .as_str()
+        .ok_or("Percorso del dump mancante")?;
     remove_owned_file(root, std::path::Path::new(path))
 }
 
